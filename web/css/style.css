@@ -33,14 +33,9 @@ button, canvas { font-family: inherit; }
 }
 
 header h1 {
-  margin: 0;
+  margin: 0 0 18px;
   font-size: clamp(28px, 4vw, 40px);
   letter-spacing: 0.04em;
-}
-
-.tag {
-  margin: 6px 0 18px;
-  color: var(--muted);
 }
 
 .window {
@@ -126,21 +121,10 @@ button:disabled { opacity: 0.55; cursor: default; }
   font-weight: 700;
 }
 
-.help, footer {
+.help {
+  margin: 12px 0 0;
   color: var(--muted);
   line-height: 1.7;
-}
-
-.help { margin: 12px 0 0; }
-
-footer {
-  margin-top: 8px;
-  font-size: 14px;
-}
-
-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.95em;
 }
 
 .sr-only {

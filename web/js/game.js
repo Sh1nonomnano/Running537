@@ -257,7 +257,6 @@
     var canvas = document.getElementById("game");
     var ctx = canvas.getContext("2d");
     var actionEl = document.getElementById("btn-action");
-    var creditsEl = document.getElementById("btn-credits");
     var muteEl = document.getElementById("btn-mute");
     var jumpEl = document.getElementById("btn-jump");
     var duckEl = document.getElementById("btn-duck");
@@ -265,7 +264,6 @@
     var liveEl = document.getElementById("live");
 
     var mode = "loading";
-    var resumeMode = "menu";
     var selection = 0;
     var session = null;
     var anim = null;
@@ -324,7 +322,6 @@
         loading: "请稍候",
         error: "请稍候",
         menu: "开始游戏",
-        credits: "返回",
         play: "暂停",
         paused: "继续",
         over: "再来一局"
@@ -335,7 +332,6 @@
         loading: "正在加载",
         error: loadError,
         menu: "菜单。最高分 " + highScore,
-        credits: "致谢",
         play: "游戏开始",
         paused: "已暂停",
         over: "游戏结束。分数 " + finalScore + "。最高分 " + highScore
@@ -370,19 +366,6 @@
       syncChrome(true);
       canvas.focus();
     }
-    function openCredits() {
-      if (mode === "credits") return;
-      resumeMode = mode === "play" ? "paused" : mode;
-      if (resumeMode === "loading" || resumeMode === "error") resumeMode = "menu";
-      mode = "credits";
-      syncChrome(true);
-    }
-    function closeCredits() {
-      mode = resumeMode && resumeMode !== "credits" ? resumeMode : "menu";
-      if (mode === "play") mode = "paused";
-      syncChrome(true);
-      canvas.focus();
-    }
     function enterOver() {
       if (mode === "over") return;
       finalScore = session ? session.score : 0;
@@ -398,7 +381,6 @@
     }
     function confirmMenu() {
       if (selection === 0) startGame();
-      else openCredits();
     }
     function duckWanted() {
       return held.has("ArrowDown") || held.has("KeyS") || held.has("TouchDuck");
@@ -465,10 +447,7 @@
           startGame();
         } else if (inRect(p, { x: 560, y: 372, w: 230, h: 78 })) {
           selection = 1;
-          openCredits();
         }
-      } else if (mode === "credits") {
-        closeCredits();
       } else if (mode === "over") {
         if (performance.now() >= overLock) startGame();
       } else if (mode === "paused") {
@@ -495,10 +474,6 @@
         if (code === "ArrowUp" || code === "KeyW") selection = 0;
         else if (code === "ArrowDown" || code === "KeyS") selection = 1;
         else if (code === "Space" || code === "Enter") confirmMenu();
-        return;
-      }
-      if (mode === "credits") {
-        if (code === "Escape" || code === "Enter" || code === "Space") closeCredits();
         return;
       }
       if (mode === "over") {
@@ -533,12 +508,6 @@
       if (mode === "menu") startGame();
       else if (mode === "play" || mode === "paused") togglePause();
       else if (mode === "over") startGame();
-      else if (mode === "credits") closeCredits();
-      canvas.focus();
-    });
-    creditsEl.addEventListener("click", function () {
-      if (mode === "credits") closeCredits();
-      else openCredits();
       canvas.focus();
     });
     muteEl.addEventListener("click", function () {
@@ -665,7 +634,7 @@
       var rabbit = selection === 0 ? [480, 271] : [480, 341];
       ctx.drawImage(anim.current(), rabbit[0], rabbit[1]);
       drawBadge("最高分 " + highScore, 16, 16);
-      drawBadge(selection === 0 ? "开始" : "致谢", 16, 52);
+      if (selection === 0) drawBadge("开始", 16, 52);
     }
 
     function drawBadge(text, x, y) {
@@ -715,20 +684,6 @@
       ctx.restore();
     }
 
-    function drawCredits() {
-      ctx.fillStyle = "rgba(60, 52, 44, 0.4)";
-      ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
-      var lines = [
-        "致谢",
-        "感谢原作者 Kasaunico。",
-        "这是朋友学生时代的作业，网页版只为纪念。",
-        "乌萨奇的样子属于原作，请不要拿去商用或上架。",
-        "天上那朵 YJR 的云，是原来就有的彩蛋。",
-        "按 Esc 或回车返回"
-      ];
-      drawCard(560, lines);
-    }
-
     function drawCard(w, lines) {
       var h = 64 + lines.length * 34;
       var x = (CONFIG.width - w) / 2;
@@ -770,7 +725,7 @@
         drawLoading();
         return;
       }
-      var showWorld = session && (mode === "play" || mode === "paused" || mode === "over" || (mode === "credits" && resumeMode !== "menu" && resumeMode !== "loading"));
+      var showWorld = session && (mode === "play" || mode === "paused" || mode === "over");
       ctx.save();
       if (mode === "play" && showWorld && shake > 0 && !reduceMotion) {
         var mag = shake * 6;
@@ -782,7 +737,6 @@
       if (showWorld && mode !== "over") drawHud();
       if (mode === "paused") drawPause();
       if (mode === "over") drawOver();
-      if (mode === "credits") drawCredits();
       if (muted && mode === "menu") {
         ctx.font = "700 16px " + FONT;
         ctx.textAlign = "left";
@@ -796,7 +750,7 @@
       requestAnimationFrame(frame);
       var dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
       last = now;
-      if (mode === "menu" || mode === "credits") {
+      if (mode === "menu") {
         menuTime += dt;
         if (anim) anim.update(dt);
       } else if (mode === "play" && session) {
