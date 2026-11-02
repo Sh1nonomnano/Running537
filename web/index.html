@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN" translate="no" class="notranslate">
+<head>
+  <meta charset="UTF-8">
+  <meta name="google" content="notranslate">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="奔跑吧乌萨奇：朋友学生时代 Java 跑酷的非商业网页重制。跳过矮砖，蹲过高砖。">
+  <title>奔跑吧乌萨奇</title>
+  <link rel="icon" href="assets/iconimage.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body translate="no" class="notranslate">
+  <div class="page">
+    <header>
+      <h1>奔跑吧乌萨奇</h1>
+      <p class="tag">大学作业的网页版 · 非商业同人纪念</p>
+    </header>
+
+    <div class="window">
+      <div class="titlebar">
+        <img src="assets/iconimage.png" width="22" height="22" alt="">
+        <span>奔跑吧乌萨奇</span>
+      </div>
+      <canvas id="game" width="800" height="450" tabindex="0" aria-label="奔跑吧乌萨奇游戏画面"></canvas>
+      <div class="touch">
+        <button type="button" id="btn-duck">下蹲</button>
+        <button type="button" id="btn-jump">跳跃</button>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <button type="button" id="btn-action">开始游戏</button>
+      <button type="button" id="btn-credits">致谢</button>
+      <button type="button" id="btn-mute" aria-pressed="false">声音：开</button>
+      <p id="best" class="best">最高分：0</p>
+    </div>
+
+    <p class="help">菜单：↑ ↓ 选择，空格或回车确认。游戏中：空格 / ↑ / W 跳跃，按住 ↓ / S 下蹲，Esc / P 暂停，M 静音。矮砖跳过去，高砖蹲过去。</p>
+    <p id="live" class="sr-only" aria-live="polite"></p>
+
+    <footer>
+      <p>感谢原作者 Kasaunico。这是朋友学生时代 Java 小作业的非商业粉丝重制，Chiikawa / 乌萨奇形象版权归权利人所有，请勿商用或上架。原版代码仍保留在 <code>Running537/</code>。天上那朵 YJR 云是原作就有的彩蛋。</p>
+    </footer>
+  </div>
+  <script src="js/game.js"></script>
+</body>
+</html>
