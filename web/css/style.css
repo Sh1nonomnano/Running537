@@ -92,6 +92,12 @@ canvas:focus-visible {
 
 #btn-duck { background: var(--leaf); }
 #btn-jump { background: var(--sun); }
+#btn-spin-cw,
+#btn-spin-ccw { background: #d5ecff; }
+#btn-smash { background: #ffd0c2; }
+
+.touch button[hidden],
+#btn-back[hidden] { display: none; }
 
 .toolbar {
   display: flex;
@@ -141,4 +147,6 @@ button:disabled { opacity: 0.55; cursor: default; }
 
 @media (max-width: 640px) {
   .best { margin-left: 0; width: 100%; }
+  .touch { flex-wrap: wrap; }
+  .touch button { flex: 1 1 42%; font-size: 16px; }
 }
