@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="google" content="notranslate">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="奔跑吧乌萨奇。跳过矮砖，蹲过高砖。">
+  <meta name="description" content="奔跑吧乌萨奇。经典跑酷，或者顺着山坡滑下去。">
   <title>奔跑吧乌萨奇</title>
   <link rel="icon" href="assets/iconimage.png">
   <link rel="stylesheet" href="css/style.css">
@@ -24,19 +24,24 @@
       <canvas id="game" width="800" height="450" tabindex="0" aria-label="奔跑吧乌萨奇游戏画面"></canvas>
       <div class="touch">
         <button type="button" id="btn-duck">下蹲</button>
+        <button type="button" id="btn-spin-cw" hidden>顺时针</button>
+        <button type="button" id="btn-smash" hidden>挥棍</button>
+        <button type="button" id="btn-spin-ccw" hidden>逆时针</button>
         <button type="button" id="btn-jump">跳跃</button>
       </div>
     </div>
 
     <div class="toolbar">
       <button type="button" id="btn-action">开始游戏</button>
+      <button type="button" id="btn-back" hidden>返回选择</button>
       <button type="button" id="btn-mute" aria-pressed="false">声音：开</button>
-      <p id="best" class="best">最高分：0</p>
+      <p id="best" class="best">经典最高：0</p>
     </div>
 
-    <p class="help">菜单：↑ ↓ 选择，空格或回车确认。游戏中：空格 / ↑ / W 跳跃，按住 ↓ / S 下蹲，Esc / P 暂停，M 静音。矮砖跳过去，高砖蹲过去。</p>
+    <p class="help">菜单：↑ ↓ 选择模式，空格、回车或点击确认。经典模式：空格 / ↑ / W 跳跃，按住 ↓ / S 下蹲。下山模式：空格 / ↑ / W 跳跃，空中按住 ← / A 顺时针、→ / D 逆时针，J / X 挥棍。Esc / P 暂停，M 静音。结束后空格或回车再来一局，Esc 或「返回选择」回到模式选择。</p>
     <p id="live" class="sr-only" aria-live="polite"></p>
   </div>
+  <script src="js/downhill.js"></script>
   <script src="js/game.js"></script>
 </body>
 </html>

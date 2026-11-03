@@ -251,29 +251,38 @@
 
   var FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Micro Hei","Droid Sans Fallback",sans-serif';
   var HIGH_KEY = "running537.highScore";
+  var HIGH_DOWN_KEY = "running537.highScore.downhill";
   var MUTE_KEY = "running537.muted";
 
   function mount() {
     var canvas = document.getElementById("game");
     var ctx = canvas.getContext("2d");
     var actionEl = document.getElementById("btn-action");
+    var backEl = document.getElementById("btn-back");
     var muteEl = document.getElementById("btn-mute");
     var jumpEl = document.getElementById("btn-jump");
     var duckEl = document.getElementById("btn-duck");
+    var spinCwEl = document.getElementById("btn-spin-cw");
+    var spinCcwEl = document.getElementById("btn-spin-ccw");
+    var smashEl = document.getElementById("btn-smash");
     var bestEl = document.getElementById("best");
     var liveEl = document.getElementById("live");
 
     var mode = "loading";
     var selection = 0;
+    var gameKind = "classic";
     var session = null;
     var anim = null;
     var images = null;
     var loadError = "";
     var menuTime = 0;
     var highScore = readNumber(HIGH_KEY);
+    var highDown = readNumber(HIGH_DOWN_KEY);
     var muted = false;
     try { muted = localStorage.getItem(MUTE_KEY) === "1"; } catch (err) { muted = false; }
     var finalScore = 0;
+    var finalCause = "";
+    var tipLeft = 0;
     var newRecord = false;
     var overLock = 0;
     var overHeld = new Set();
@@ -311,11 +320,29 @@
       };
     }
 
+    function showDownScore() {
+      return (mode === "menu" && selection === 1) || (gameKind === "downhill" && mode !== "menu");
+    }
+
+    function syncTouch() {
+      var downhill = gameKind === "downhill" && mode !== "menu" && mode !== "loading" && mode !== "error";
+      if (duckEl) duckEl.hidden = mode === "menu" || mode === "loading" || mode === "error" || downhill;
+      if (spinCwEl) spinCwEl.hidden = !downhill;
+      if (spinCcwEl) spinCcwEl.hidden = !downhill;
+      if (smashEl) smashEl.hidden = !downhill;
+      if (jumpEl) {
+        jumpEl.hidden = mode === "loading" || mode === "error";
+        jumpEl.textContent = mode === "menu" ? "开始" : "跳跃";
+      }
+      if (backEl) backEl.hidden = !(mode === "play" || mode === "paused" || mode === "over");
+    }
+
     function syncChrome(force) {
-      var sig = [mode, highScore, muted ? 1 : 0, finalScore].join("|");
+      var sig = [mode, gameKind, selection, highScore, highDown, muted ? 1 : 0, finalScore].join("|");
       if (!force && sig === chromeSig) return;
       chromeSig = sig;
-      bestEl.textContent = "最高分：" + highScore;
+      var bestNow = showDownScore() ? highDown : highScore;
+      bestEl.textContent = (showDownScore() ? "下山最高：" : "经典最高：") + bestNow;
       muteEl.textContent = muted ? "声音：关" : "声音：开";
       muteEl.setAttribute("aria-pressed", muted ? "true" : "false");
       var labels = {
@@ -328,13 +355,14 @@
       };
       actionEl.textContent = labels[mode] || "开始游戏";
       actionEl.disabled = mode === "loading" || mode === "error";
+      syncTouch();
       var live = {
         loading: "正在加载",
         error: loadError,
-        menu: "菜单。最高分 " + highScore,
-        play: "游戏开始",
+        menu: "选择模式。经典最高 " + highScore + "。下山最高 " + highDown,
+        play: gameKind === "downhill" ? "下山模式开始" : "游戏开始",
         paused: "已暂停",
-        over: "游戏结束。分数 " + finalScore + "。最高分 " + highScore
+        over: "游戏结束。分数 " + finalScore + "。最高分 " + bestNow
       };
       if (liveEl) liveEl.textContent = live[mode] || "";
     }
@@ -351,8 +379,17 @@
       canvas.focus();
     }
     function startGame() {
-      session = createSession();
+      if (mode === "menu") gameKind = selection === 1 ? "downhill" : "classic";
+      if (gameKind === "downhill" && root.UsagiDownhill) {
+        session = root.UsagiDownhill.createSession();
+        tipLeft = 6.2;
+      } else {
+        gameKind = "classic";
+        session = createSession();
+        tipLeft = 0;
+      }
       finalScore = 0;
+      finalCause = "";
       newRecord = false;
       shake = 0;
       mode = "play";
@@ -362,17 +399,24 @@
     function goMenu() {
       mode = "menu";
       session = null;
-      selection = 0;
+      selection = gameKind === "downhill" ? 1 : 0;
       syncChrome(true);
       canvas.focus();
     }
     function enterOver() {
       if (mode === "over") return;
       finalScore = session ? session.score : 0;
-      newRecord = finalScore > highScore;
+      finalCause = session && session.cause ? session.cause : "";
+      var best = gameKind === "downhill" ? highDown : highScore;
+      newRecord = finalScore > best;
       if (newRecord) {
-        highScore = finalScore;
-        writeStore(HIGH_KEY, highScore);
+        if (gameKind === "downhill") {
+          highDown = finalScore;
+          writeStore(HIGH_DOWN_KEY, highDown);
+        } else {
+          highScore = finalScore;
+          writeStore(HIGH_KEY, highScore);
+        }
       }
       overLock = performance.now() + 450;
       overHeld = new Set(held);
@@ -380,17 +424,28 @@
       syncChrome(true);
     }
     function confirmMenu() {
-      if (selection === 0) startGame();
+      startGame();
     }
     function duckWanted() {
       return held.has("ArrowDown") || held.has("KeyS") || held.has("TouchDuck");
     }
+    function downhillRotateDir() {
+      var dir = 0;
+      if (held.has("ArrowLeft") || held.has("KeyA") || held.has("TouchCW")) dir += 1;
+      if (held.has("ArrowRight") || held.has("KeyD") || held.has("TouchCCW")) dir -= 1;
+      return dir;
+    }
     function applyDuck() {
-      if (session && mode === "play") session.setDuckHeld(duckWanted());
+      if (gameKind === "downhill") return;
+      if (session && mode === "play" && session.setDuckHeld) session.setDuckHeld(duckWanted());
     }
     function doJump() {
       if (mode !== "play" || !session) return;
       if (session.jump()) sounds.jump.play();
+    }
+    function doSmash() {
+      if (mode !== "play" || gameKind !== "downhill" || !session || !session.smash) return;
+      session.smash();
     }
 
     function loadImage(src) {
@@ -442,11 +497,14 @@
       canvas.focus();
       var p = logicalPoint(event);
       if (mode === "menu") {
-        if (inRect(p, { x: 560, y: 280, w: 230, h: 90 })) {
-          selection = 0;
-          startGame();
-        } else if (inRect(p, { x: 560, y: 372, w: 230, h: 78 })) {
-          selection = 1;
+        var cards = menuCards();
+        var c;
+        for (c = 0; c < cards.length; c++) {
+          if (inRect(p, cards[c])) {
+            selection = c;
+            startGame();
+            break;
+          }
         }
       } else if (mode === "over") {
         if (performance.now() >= overLock) startGame();
@@ -474,6 +532,7 @@
         if (code === "ArrowUp" || code === "KeyW") selection = 0;
         else if (code === "ArrowDown" || code === "KeyS") selection = 1;
         else if (code === "Space" || code === "Enter") confirmMenu();
+        syncChrome(true);
         return;
       }
       if (mode === "over") {
@@ -489,6 +548,10 @@
           return;
         }
         if (mode === "paused") return;
+        if (gameKind === "downhill" && (code === "KeyJ" || code === "KeyX") && !event.repeat) {
+          doSmash();
+          return;
+        }
         if (code === "Space" || code === "ArrowUp" || code === "KeyW") doJump();
         applyDuck();
       }
@@ -501,7 +564,8 @@
     });
     window.addEventListener("blur", function () {
       held.clear();
-      if (session) session.setDuckHeld(false);
+      if (session && session.setDuckHeld) session.setDuckHeld(false);
+      if (session && session.setRotate) session.setRotate(0);
     });
 
     actionEl.addEventListener("click", function () {
@@ -510,6 +574,11 @@
       else if (mode === "over") startGame();
       canvas.focus();
     });
+    if (backEl) {
+      backEl.addEventListener("click", function () {
+        if (mode === "play" || mode === "paused" || mode === "over") goMenu();
+      });
+    }
     muteEl.addEventListener("click", function () {
       toggleMute();
       canvas.focus();
@@ -517,23 +586,39 @@
 
     jumpEl.addEventListener("pointerdown", function (event) {
       event.preventDefault();
+      canvas.focus();
       if (mode === "menu") startGame();
       else doJump();
     });
-    duckEl.addEventListener("contextmenu", function (event) { event.preventDefault(); });
-    duckEl.addEventListener("pointerdown", function (event) {
-      event.preventDefault();
-      try { duckEl.setPointerCapture(event.pointerId); } catch (err) {}
-      held.add("TouchDuck");
-      applyDuck();
-    });
-    function releaseDuck() {
-      held.delete("TouchDuck");
-      applyDuck();
+    function holdControl(el, code) {
+      if (!el) return;
+      el.addEventListener("contextmenu", function (event) { event.preventDefault(); });
+      el.addEventListener("pointerdown", function (event) {
+        event.preventDefault();
+        try { el.setPointerCapture(event.pointerId); } catch (err) {}
+        held.add(code);
+        canvas.focus();
+        applyDuck();
+      });
+      function release() {
+        held.delete(code);
+        applyDuck();
+      }
+      el.addEventListener("pointerup", release);
+      el.addEventListener("pointercancel", release);
+      el.addEventListener("lostpointercapture", release);
     }
-    duckEl.addEventListener("pointerup", releaseDuck);
-    duckEl.addEventListener("pointercancel", releaseDuck);
-    duckEl.addEventListener("lostpointercapture", releaseDuck);
+    holdControl(duckEl, "TouchDuck");
+    holdControl(spinCwEl, "TouchCW");
+    holdControl(spinCcwEl, "TouchCCW");
+    if (smashEl) {
+      smashEl.addEventListener("contextmenu", function (event) { event.preventDefault(); });
+      smashEl.addEventListener("pointerdown", function (event) {
+        event.preventDefault();
+        canvas.focus();
+        doSmash();
+      });
+    }
 
     function fit() {
       var dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -559,7 +644,32 @@
       ctx.closePath();
     }
 
+    function menuCards() {
+      return [
+        { kind: "classic", title: "经典模式", sub: "矮砖跳过，高砖蹲过", x: 456, y: 156, w: 312, h: 96 },
+        { kind: "downhill", title: "下山模式", sub: "顺坡滑雪，空中翻转", x: 456, y: 268, w: 312, h: 96 }
+      ];
+    }
+
+    function visualEnv() {
+      return {
+        images: images,
+        anim: anim,
+        font: FONT,
+        highScore: highDown,
+        muted: muted,
+        tip: mode === "play" ? tipLeft : 0,
+        reduceMotion: reduceMotion,
+        width: CONFIG.width,
+        height: CONFIG.height
+      };
+    }
+
     function drawWorld() {
+      if (gameKind === "downhill" && root.UsagiDownhill) {
+        root.UsagiDownhill.drawWorld(ctx, session, visualEnv());
+        return;
+      }
       var player = session.player;
       ctx.fillStyle = "#d0f4f7";
       ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
@@ -605,6 +715,10 @@
     }
 
     function drawHud() {
+      if (gameKind === "downhill" && root.UsagiDownhill) {
+        root.UsagiDownhill.drawHud(ctx, session, visualEnv());
+        return;
+      }
       ctx.save();
       ctx.font = "700 25px " + FONT;
       ctx.textAlign = "left";
@@ -628,13 +742,48 @@
 
     function drawWelcome() {
       ctx.drawImage(images.welcome, 0, 0, CONFIG.width, CONFIG.height);
-      var bob = Math.sin(menuTime * 6) * 3;
-      var arrowY = selection === 0 ? 308 : 392;
-      ctx.drawImage(images.selector, 578 + bob, arrowY, 25, 45);
-      var rabbit = selection === 0 ? [480, 271] : [480, 341];
-      ctx.drawImage(anim.current(), rabbit[0], rabbit[1]);
-      drawBadge("最高分 " + highScore, 16, 16);
-      if (selection === 0) drawBadge("开始", 16, 52);
+      var fade = ctx.createLinearGradient(330, 0, 470, 0);
+      fade.addColorStop(0, "rgba(214, 242, 246, 0)");
+      fade.addColorStop(1, "rgba(214, 242, 246, 1)");
+      ctx.fillStyle = fade;
+      ctx.fillRect(330, 0, 150, CONFIG.height);
+      ctx.fillStyle = "#d6f2f6";
+      ctx.fillRect(468, 0, CONFIG.width - 468, CONFIG.height);
+
+      ctx.fillStyle = "#3c342c";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.font = "700 28px " + FONT;
+      ctx.fillText("选择模式", 456, 78);
+      ctx.font = "700 15px " + FONT;
+      ctx.fillStyle = "#6d6258";
+      ctx.fillText("↑ ↓ 选择    空格或点击开始", 456, 114);
+
+      var cards = menuCards();
+      var i;
+      for (i = 0; i < cards.length; i++) {
+        var card = cards[i];
+        var on = selection === i;
+        ctx.fillStyle = on ? "#ffe08a" : "#fffdf8";
+        ctx.strokeStyle = "#3c342c";
+        ctx.lineWidth = on ? 4 : 2.5;
+        roundRect(card.x, card.y, card.w, card.h, 16);
+        ctx.fill();
+        ctx.stroke();
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#3c342c";
+        ctx.font = "700 26px " + FONT;
+        ctx.fillText(card.title, card.x + 18, card.y + 34);
+        ctx.font = "700 15px " + FONT;
+        ctx.fillStyle = "#6d6258";
+        ctx.fillText(card.sub, card.x + 18, card.y + 66);
+        if (on && anim) {
+          ctx.drawImage(anim.current(), card.x + card.w - 70, card.y + 12, 52, 72);
+        }
+      }
+      drawBadge("经典最高 " + highScore, 16, 16);
+      drawBadge("下山最高 " + highDown, 16, 52);
     }
 
     function drawBadge(text, x, y) {
@@ -661,6 +810,10 @@
     }
 
     function drawOver() {
+      if (gameKind === "downhill") {
+        drawDownhillOver();
+        return;
+      }
       ctx.fillStyle = "#ffa500";
       ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
       ctx.save();
@@ -680,7 +833,33 @@
       ctx.fillStyle = "#4e4a46";
       ctx.font = "700 22px " + FONT;
       ctx.fillText("空格 / 回车 · 再来一局", CONFIG.width / 2, 368);
-      ctx.fillText("Esc · 返回菜单", CONFIG.width / 2, 408);
+      ctx.fillText("Esc · 返回选择", CONFIG.width / 2, 408);
+      ctx.restore();
+    }
+
+    function drawDownhillOver() {
+      ctx.fillStyle = "#ffa500";
+      ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#4e4a46";
+      ctx.font = "700 56px " + FONT;
+      ctx.fillText("游戏结束", CONFIG.width / 2, 118);
+      ctx.font = "700 24px " + FONT;
+      ctx.fillText(finalCause || "下山结束", CONFIG.width / 2, 172);
+      ctx.font = "700 36px " + FONT;
+      ctx.fillText("分数 " + finalScore, CONFIG.width / 2, 224);
+      ctx.font = "700 28px " + FONT;
+      ctx.fillText("下山最高 " + highDown, CONFIG.width / 2, 274);
+      if (newRecord) {
+        ctx.fillStyle = "#8a3b22";
+        ctx.fillText("新纪录", CONFIG.width / 2, 322);
+      }
+      ctx.fillStyle = "#4e4a46";
+      ctx.font = "700 22px " + FONT;
+      ctx.fillText("空格 / 回车 · 再滑一局", CONFIG.width / 2, 368);
+      ctx.fillText("Esc · 返回选择", CONFIG.width / 2, 408);
       ctx.restore();
     }
 
@@ -754,7 +933,12 @@
         menuTime += dt;
         if (anim) anim.update(dt);
       } else if (mode === "play" && session) {
-        applyDuck();
+        if (gameKind === "downhill") {
+          if (session.setRotate) session.setRotate(downhillRotateDir());
+          if (tipLeft > 0) tipLeft = Math.max(0, tipLeft - dt);
+        } else {
+          applyDuck();
+        }
         var events = session.update(dt);
         if (anim) anim.update(dt);
         var i;
@@ -764,6 +948,14 @@
             shake = 1;
           } else if (events[i] === "duck") {
             sounds.duck.play();
+          } else if (events[i] === "stumble") {
+            sounds.duck.play();
+            shake = Math.max(shake, 0.65);
+          } else if (events[i] === "smash") {
+            sounds.hit.play();
+            shake = Math.max(shake, 0.4);
+          } else if (events[i] === "launch") {
+            sounds.jump.play();
           }
         }
         if (shake > 0) shake = Math.max(0, shake - dt * 3);
@@ -777,17 +969,21 @@
     root.UsagiRun.snapshot = function () {
       return {
         mode: mode,
+        kind: gameKind,
+        selection: selection,
         score: session ? session.score : 0,
         finalScore: finalScore,
         highScore: highScore,
         muted: muted,
         ducked: !!(session && session.player.ducked),
-        grounded: !!(session && session.player.grounded()),
+        grounded: session ? (typeof session.player.grounded === "function" ? !!session.player.grounded() : !!session.player.grounded) : null,
         alive: session ? session.player.alive : null,
-        x: session ? Math.round(session.player.x) : null,
-        y: session ? Math.round(session.player.y) : null,
-        speed: session ? session.blockSpeed : null,
-        blocks: session ? session.blocks.filter(function (b) { return b.visible && b.x > -50 && b.x < CONFIG.width; }).length : 0
+        x: session && session.player.x != null ? Math.round(session.player.x) : null,
+        y: session && session.player.y != null ? Math.round(session.player.y) : null,
+        speed: session ? (session.blockSpeed != null ? session.blockSpeed : Math.round(session.player.vs || 0)) : null,
+        blocks: session && session.blocks ? session.blocks.filter(function (b) { return b.visible && b.x > -50 && b.x < CONFIG.width; }).length : 0,
+        cause: finalCause,
+        rot: session && gameKind === "downhill" ? session.player.rot : null
       };
     };
   }
