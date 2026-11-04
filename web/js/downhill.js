@@ -4,7 +4,7 @@
  * 坡度沿路程起伏：凹弧略加速，凸弧略减速，也更容易离地。
  * 撞上岩石或树不会立刻结束，只会急减速并踉跄；飞鼠从后面追，距离耗尽才抓住。
  * 摔到坡面以下太深，或飞得离开可玩范围，会直接结束。
- * 飞鼠是占位剪影，正式形象以后再换，这里不放官方立绘。
+ * 飞鼠用切图贴在坡上，朝下坡追。捡到小车会开一阵，撞开障碍，时间一到恢复滑行。
  */
 (function (root) {
   "use strict";
@@ -61,6 +61,15 @@
     hitStumble: 0.8,
     catchTime: 0.85,
     chaseDanger: 100,
+
+    // 小车强化。限时加速，撞上障碍按挥棍那套撞开，不改追赶距离的加减规则。
+    kartTime: 5.2,
+    kartAccel: 240,
+    kartMaxVs: 760,
+    kartBoost: 90,
+    kartPad: 220,
+    kartGapMin: 1080,
+    kartGapRand: 480,
 
     // 二次失败：掉到坡面底下，或飞出可玩高度。
     deepFall: -220,
@@ -250,7 +259,8 @@
       airRot: 0,
       invuln: 0,
       caught: false,
-      catchT: 0
+      catchT: 0,
+      kart: 0
     };
     zoom = zoomTarget(player.vs);
 
@@ -259,6 +269,7 @@
     if (!empty) {
       obstacles.push({ kind: "ramp", s: 440, len: 176, peak: 56, alive: true });
       obstacles.push({ kind: "rock", s: 1180, w: 36, hgt: 42, alive: true });
+      obstacles.push({ kind: "kart", s: 1560, w: 36, hgt: 36, alive: true });
       obstacles.push({ kind: "tree", s: 2140, w: 28, hgt: 74, alive: true });
       nextS = 3000;
     }
@@ -358,7 +369,7 @@
       for (i = 0; i < obstacles.length; i++) {
         var o = obstacles[i];
         if (!o.alive) continue;
-        if (o.kind !== "rock" && o.kind !== "tree") continue;
+        if (o.kind !== "rock" && o.kind !== "tree" && o.kind !== "kart") continue;
         if (o.s < fromS || o.s >= minS) continue;
         list.push(o);
       }
@@ -395,11 +406,15 @@
       mark("catch");
     }
 
+    function speedCap() {
+      return player.kart > 0 ? DH.kartMaxVs : DH.maxVs;
+    }
+
     function breakObstacle(o) {
       if (!o.alive) return;
       o.alive = false;
       o.grazed = true;
-      player.vs = Math.min(DH.maxVs, player.vs + 110);
+      player.vs = Math.min(speedCap(), player.vs + 110);
       if (player.grounded) {
         player.grounded = false;
         player.h += 4;
@@ -454,7 +469,7 @@
         if (!smashGround && !player.grounded && smashPhase > 0.35 && hh <= terrainHeight(ss) + 2) {
           smashGround = true;
           player.vh = Math.max(player.vh, 300);
-          player.vs = Math.min(DH.maxVs, player.vs + 55);
+          player.vs = Math.min(speedCap(), player.vs + 55);
           player.h = Math.max(player.h, floorH(player.s) + 6);
           mark("smash");
           pop("撑了一下", player.s + 78, player.h + 14);
@@ -474,6 +489,10 @@
         var o = obstacles[i];
         if (!o.alive || o.grazed || (o.kind !== "rock" && o.kind !== "tree")) continue;
         if (!circleHits(player.s, player.h, DH.bodyR, o)) continue;
+        if (player.kart > 0) {
+          breakObstacle(o);
+          continue;
+        }
         o.grazed = true;
         player.invuln = 0.7;
         player.stumble = Math.max(player.stumble, DH.hitStumble);
@@ -521,6 +540,10 @@
       if (player.caught) {
         caughtStep(dt);
         return;
+      }
+      if (player.kart > 0) {
+        player.kart -= dt;
+        if (player.kart < 0) player.kart = 0;
       }
 
       if (player.invuln > 0) {
@@ -573,8 +596,9 @@
         if (kappa < 0) accel += DH.concaveK * (-kappa);
         else accel -= DH.convexK * kappa;
       }
+      if (player.kart > 0 && player.stumble <= 0) accel += DH.kartAccel;
       player.vs += accel * dt;
-      player.vs = clamp(player.vs, 0, DH.maxVs);
+      player.vs = clamp(player.vs, 0, speedCap());
 
       if (player.grounded && !rampAt(player.s) && kappa > 0.0009 && player.vs > 545) {
         var hold = DH.gravity * Math.cos(th);
@@ -595,7 +619,7 @@
         var after = rampAt(player.s);
         if (before && !after) {
           player.grounded = false;
-          player.vs = Math.min(DH.maxVs, player.vs + DH.rampVs);
+          player.vs = Math.min(speedCap(), player.vs + DH.rampVs);
           player.vh = Math.max(DH.jumpV * DH.rampVhMul, player.vs * 0.4 + DH.rampVhAdd);
           player.h = terrainHeight(prevS) + DH.feet + 2;
           player.airRot = 0;
@@ -637,14 +661,46 @@
       if (!player.alive) return;
       resolveSmash();
       resolveBody();
+      resolvePickup();
       chase += (player.vs - DH.chaseCruise) * DH.chaseFollow * dt;
       chase = clamp(chase, 0, DH.chaseMax);
       if (chase <= 0) beginCatch();
     }
 
+    function hazardNear(s, pad) {
+      var i;
+      for (i = 0; i < obstacles.length; i++) {
+        var o = obstacles[i];
+        if (!o.alive) continue;
+        if (o.kind !== "rock" && o.kind !== "tree" && o.kind !== "kart" && o.kind !== "ramp") continue;
+        var end = o.s + (o.len || o.w || 30);
+        if (s + 28 > o.s - pad && s < end + pad) return o;
+      }
+      return null;
+    }
+
+    function resolvePickup() {
+      if (!player.alive || player.caught) return;
+      var i;
+      for (i = 0; i < obstacles.length; i++) {
+        var o = obstacles[i];
+        if (o.kind !== "kart" || !o.alive) continue;
+        var ds = player.s - (o.s + (o.w || 36) * 0.5);
+        var dh = player.h - (terrainHeight(o.s) + 24);
+        if (ds * ds + dh * dh > 48 * 48) continue;
+        o.alive = false;
+        player.kart = DH.kartTime;
+        player.vs = Math.min(DH.kartMaxVs, player.vs + DH.kartBoost);
+        if (player.stumble > 0.2) player.stumble = 0.2;
+        mark("kart");
+        pop("开车!", player.s + 48, player.h + 28);
+        break;
+      }
+    }
+
     function spawnOne() {
       var roll = rng();
-      var kind = roll < 0.46 ? "rock" : (roll < 0.7 ? "tree" : "ramp");
+      var kind = roll < 0.4 ? "rock" : (roll < 0.62 ? "tree" : (roll < 0.78 ? "kart" : "ramp"));
       var guard = 0;
       if (kind !== "ramp") {
         var lip = rampLipBefore(nextS + 0.001);
@@ -680,6 +736,16 @@
       } else if (kind === "tree") {
         obstacles.push({ kind: "tree", s: nextS, w: 28, hgt: 72, alive: true });
         gap = DH.treeGapMin + rng() * DH.treeGapRand;
+      } else if (kind === "kart") {
+        var padGuard = 0;
+        while (padGuard < 5) {
+          var near = hazardNear(nextS, DH.kartPad);
+          if (!near) break;
+          nextS = near.s + (near.len || near.w || 30) + DH.kartPad;
+          padGuard += 1;
+        }
+        obstacles.push({ kind: "kart", s: nextS, w: 36, hgt: 36, alive: true });
+        gap = DH.kartGapMin + rng() * DH.kartGapRand;
       } else {
         var len = 156 + Math.floor(rng() * 36);
         obstacles.push({
@@ -739,7 +805,7 @@
       player.grounded = false;
       player.vh = DH.jumpV;
       player.h += 3;
-      player.vs = Math.min(DH.maxVs, player.vs + 24);
+      player.vs = Math.min(speedCap(), player.vs + 24);
       player.airRot = 0;
       return true;
     };
@@ -822,7 +888,7 @@
         }
       }
       obstacles = obstacles.filter(function (o) {
-        if ((o.kind === "rock" || o.kind === "tree") && !o.alive) return false;
+        if ((o.kind === "rock" || o.kind === "tree" || o.kind === "kart") && !o.alive) return false;
         var end = o.s + (o.len || o.w || 0);
         return end > player.s - 1600;
       });
@@ -934,13 +1000,13 @@
 
     drawRamps(ctx, session.obstacles, world);
     drawTracks(ctx, player.s, world);
-    drawObstacles(ctx, session.obstacles, world);
+    drawObstacles(ctx, session.obstacles, world, images, session.time);
     drawBits(ctx, session.bits, world);
     drawFlakes(ctx, session._flakes, world);
     drawShadow(ctx, player, world, session._terrain);
-    if (!player.caught) drawMomonga(ctx, session, world, env.reduceMotion, false);
+    if (!player.caught) drawMomonga(ctx, session, world, images, env.reduceMotion, false);
     drawRider(ctx, player, images, env.anim, session.stickPose(), world, env.reduceMotion);
-    if (player.caught) drawMomonga(ctx, session, world, env.reduceMotion, true);
+    if (player.caught) drawMomonga(ctx, session, world, images, env.reduceMotion, true);
     drawPopups(ctx, session.popups, world, font);
     ctx.restore();
   }
@@ -1020,13 +1086,38 @@
     ctx.stroke();
   }
 
-  function drawObstacles(ctx, obstacles, world) {
+  function drawObstacles(ctx, obstacles, world, images, time) {
     var i;
     for (i = 0; i < obstacles.length; i++) {
       var o = obstacles[i];
       if (o.kind === "rock" && o.alive) drawRock(ctx, o, world);
       else if (o.kind === "tree" && o.alive) drawTree(ctx, o, world);
+      else if (o.kind === "kart" && o.alive) drawKartPickup(ctx, o, world, images, time);
     }
+  }
+
+  function drawKartPickup(ctx, o, world, images, time) {
+    var bob = Math.sin((time || 0) * 5 + o.s * 0.01) * 6;
+    var mid = o.s + (o.w || 36) * 0.5;
+    var p = world(mid, 34 + bob);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(slopeAngle(mid));
+    ctx.strokeStyle = "#e2a84b";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(0, 10, 24, 8, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    var img = images && images["usagi-car"];
+    if (img) {
+      var dh = 42;
+      var dw = dh * ((img.width || 248) / (img.height || 299));
+      ctx.drawImage(img, -dw / 2, -dh + 12, dw, dh);
+    } else {
+      ctx.fillStyle = "#7eb6e0";
+      ctx.fillRect(-16, -14, 32, 18);
+    }
+    ctx.restore();
   }
 
   function drawRock(ctx, o, world) {
@@ -1127,7 +1218,7 @@
     ctx.fill();
   }
 
-  function drawMomonga(ctx, session, world, reduceMotion, lunging) {
+  function drawMomonga(ctx, session, world, images, reduceMotion, lunging) {
     var player = session.player;
     var chase = session.chase || 0;
     var terrain = session._terrain;
@@ -1135,7 +1226,7 @@
     if (!reduceMotion) bob = Math.sin((session.time || 0) * 6.2) * 5;
     var glide = chase < DH.chaseDanger ? 16 : 0;
     var ms = player.s - chase;
-    var mh = terrain(ms) + 30 + bob + glide;
+    var mh = terrain(ms) + 18 + bob + glide;
     var scale = 1;
     if (lunging) {
       var u = 1 - clamp(player.catchT / DH.catchTime, 0, 1);
@@ -1144,10 +1235,33 @@
       scale = 1.05 + u * 0.4;
     }
     var p = world(ms, mh);
+    var zoom = session.zoom || 1;
+    var screenX = DH.anchorX + (p.x - DH.anchorX) * zoom;
+    var screenY = DH.anchorY + (p.y - DH.anchorY) * zoom;
+    if (screenX < 340 && screenY < 210) {
+      p = {
+        x: p.x,
+        y: DH.anchorY + (210 - DH.anchorY) / zoom
+      };
+    }
     var th = slopeAngle(ms);
+    var sprite = images && images["momonga-chaser"];
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(th);
+    if (sprite) {
+      var dh = 72 * scale;
+      var dw = dh * ((sprite.width || 394) / (sprite.height || 334));
+      ctx.fillStyle = "rgba(60, 52, 44, 0.18)";
+      ctx.beginPath();
+      ctx.ellipse(0, 8, dw * 0.28, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // 原图尾巴在右侧。翻过来让脸朝坡下，尾巴留在上坡一侧。
+      ctx.scale(-1, 1);
+      ctx.drawImage(sprite, -dw / 2, -dh * 0.7, dw, dh);
+      ctx.restore();
+      return;
+    }
     ctx.scale(scale * 1.15, scale * 1.15);
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
@@ -1227,6 +1341,14 @@
       var wob = Math.sin(player.stumble * 34) * 0.42 * k;
       if (reduceMotion) wob *= 0.35;
       ctx.rotate(wob);
+    }
+    var kartImg = player.kart > 0 && images["usagi-car"];
+    if (kartImg) {
+      var kh = 90;
+      var kw = kh * ((kartImg.width || 248) / (kartImg.height || 299));
+      ctx.drawImage(kartImg, -kw / 2, -kh + 40, kw, kh);
+      ctx.restore();
+      return;
     }
     var img = images.jump;
     if (player.stumble > 0 && images.duck) img = images.duck;
@@ -1357,7 +1479,10 @@
     ctx.lineTo(tick, barY + barH + 2);
     ctx.stroke();
 
-    ink(ctx, "←→ 翻转   J 挥棍", 22, 96, "700 14px " + font);
+    var hint = session.player && session.player.kart > 0
+      ? ("开车 " + session.player.kart.toFixed(1) + "s")
+      : "←→ 翻转   J 挥棍";
+    ink(ctx, hint, 22, 96, "700 14px " + font);
     if (env.muted) {
       ctx.textAlign = "left";
       ink(ctx, "静音", DH.width - 64, 14, "700 16px " + font);
@@ -1411,7 +1536,7 @@
     ctx.fillStyle = "#3c342c";
     ctx.fillText("空格 / ↑ 跳跃，跳台会把你抛起来", x + 16, y + 40);
     ctx.fillText("空中 ← 顺时针，→ 逆时针", x + 16, y + 64);
-    ctx.fillText("J 挥棍。飞鼠追上就结束", x + 16, y + 88);
+    ctx.fillText("J 挥棍。捡到小车会开一阵", x + 16, y + 88);
     ctx.restore();
   }
 

@@ -347,3 +347,61 @@ test("速度越快镜头越远，慢下来会平滑拉回", () => {
   }
   assert.ok(s.zoom > far + 0.04, `${s.zoom} vs ${far}`);
 });
+
+test("捡到小车会加速，撞障碍会顶开但不会死", () => {
+  const s = empty();
+  const before = s.player.vs;
+  s.obstacles.push({ kind: "kart", s: s.player.s, w: 36, hgt: 36, alive: true });
+  const got = s.update(1 / 60);
+  assert.ok(got.includes("kart"));
+  assert.ok(s.player.kart > CONFIG.kartTime - 0.2);
+  assert.ok(s.player.vs > before + 40);
+  assert.equal(s.player.alive, true);
+  assert.ok(s.popups.some((p) => p.text.includes("开车")));
+
+  const rock = { kind: "rock", s: s.player.s + 4, w: 40, hgt: 52, alive: true };
+  s.obstacles.push(rock);
+  const chase = s.chase;
+  s.update(1 / 60);
+  assert.equal(rock.alive, false);
+  assert.equal(s.player.alive, true);
+  assert.equal(s.cause, "");
+  assert.ok(s.chase >= chase);
+
+  s.player.kart = 0.04;
+  s.update(0.2);
+  assert.equal(s.player.kart, 0);
+});
+
+test("小车不会贴着跳台或岩石", () => {
+  const s = createSession({ rng: () => 0.7 });
+  const ramp = s.obstacles.find((o) => o.kind === "ramp");
+  assert.ok(ramp);
+  for (const kart of s.obstacles.filter((o) => o.kind === "kart")) {
+    if (kart.s >= ramp.s) {
+      assert.ok(kart.s >= ramp.s + ramp.len + CONFIG.rampClear - 1);
+    }
+    for (const hazard of s.obstacles) {
+      if (hazard === kart || !hazard.alive) continue;
+      if (hazard.kind !== "rock" && hazard.kind !== "tree") continue;
+      assert.ok(Math.abs(hazard.s - kart.s) >= CONFIG.kartPad - 2);
+    }
+  }
+  s.player.s = 2400;
+  s.player.vs = 320;
+  s.player.grounded = true;
+  s.update(1 / 30);
+  const karts = s.obstacles.filter((o) => o.kind === "kart" && o.alive);
+  assert.ok(karts.length >= 1);
+  for (const kart of karts) {
+    for (const hazard of s.obstacles) {
+      if (hazard === kart || !hazard.alive) continue;
+      if (hazard.kind !== "rock" && hazard.kind !== "tree" && hazard.kind !== "ramp") continue;
+      const end = hazard.s + (hazard.len || hazard.w || 0);
+      if (kart.s + 36 < hazard.s) continue;
+      if (kart.s > end) {
+        assert.ok(kart.s >= end + Math.min(CONFIG.kartPad, CONFIG.rampClear) - 2);
+      }
+    }
+  }
+});

@@ -459,7 +459,7 @@
 
     var names = [
       "welcome", "selector", "grass", "duck", "jump", "block",
-      "cloud1", "cloud2", "yjr", "iconimage"
+      "cloud1", "cloud2", "yjr", "iconimage", "momonga-chaser", "usagi-car"
     ];
     Promise.all(names.map(function (name) { return loadImage("assets/" + name + ".png"); }))
       .then(function (loaded) {
@@ -958,6 +958,8 @@
             sounds.hit.play();
             shake = Math.max(shake, 0.4);
           } else if (events[i] === "launch") {
+            sounds.jump.play();
+          } else if (events[i] === "kart") {
             sounds.jump.play();
           }
         }
