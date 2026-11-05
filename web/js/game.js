@@ -459,7 +459,7 @@
 
     var names = [
       "welcome", "selector", "grass", "duck", "jump", "block",
-      "cloud1", "cloud2", "yjr", "iconimage"
+      "cloud1", "cloud2", "yjr", "iconimage", "momonga-chaser", "usagi-car"
     ];
     Promise.all(names.map(function (name) { return loadImage("assets/" + name + ".png"); }))
       .then(function (loaded) {
@@ -647,7 +647,7 @@
     function menuCards() {
       return [
         { kind: "classic", title: "经典模式", sub: "矮砖跳过，高砖蹲过", x: 456, y: 156, w: 312, h: 96 },
-        { kind: "downhill", title: "下山模式", sub: "顺坡滑雪，空中翻转", x: 456, y: 268, w: 312, h: 96 }
+        { kind: "downhill", title: "下山模式", sub: "顺坡滑雪，躲开飞鼠", x: 456, y: 268, w: 312, h: 96 }
       ];
     }
 
@@ -948,6 +948,9 @@
             shake = 1;
           } else if (events[i] === "duck") {
             sounds.duck.play();
+          } else if (events[i] === "catch") {
+            sounds.hit.play();
+            shake = 1;
           } else if (events[i] === "stumble") {
             sounds.duck.play();
             shake = Math.max(shake, 0.65);
@@ -955,6 +958,8 @@
             sounds.hit.play();
             shake = Math.max(shake, 0.4);
           } else if (events[i] === "launch") {
+            sounds.jump.play();
+          } else if (events[i] === "kart") {
             sounds.jump.play();
           }
         }
