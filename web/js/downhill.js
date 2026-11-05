@@ -1223,27 +1223,17 @@
     var chase = session.chase || 0;
     var terrain = session._terrain;
     var bob = 0;
-    if (!reduceMotion) bob = Math.sin((session.time || 0) * 6.2) * 5;
-    var glide = chase < DH.chaseDanger ? 16 : 0;
+    if (!reduceMotion) bob = Math.sin((session.time || 0) * 6.2) * 3;
     var ms = player.s - chase;
-    var mh = terrain(ms) + 18 + bob + glide;
+    var mh = terrain(ms) + bob;
     var scale = 1;
     if (lunging) {
       var u = 1 - clamp(player.catchT / DH.catchTime, 0, 1);
       ms = player.s - (1 - u) * 42;
-      mh = player.h + 4 + (1 - u) * 8;
-      scale = 1.05 + u * 0.4;
+      mh = terrain(ms) + 6 + (1 - u) * 10;
+      scale = 1.05 + u * 0.25;
     }
     var p = world(ms, mh);
-    var zoom = session.zoom || 1;
-    var screenX = DH.anchorX + (p.x - DH.anchorX) * zoom;
-    var screenY = DH.anchorY + (p.y - DH.anchorY) * zoom;
-    if (screenX < 340 && screenY < 210) {
-      p = {
-        x: p.x,
-        y: DH.anchorY + (210 - DH.anchorY) / zoom
-      };
-    }
     var th = slopeAngle(ms);
     var sprite = images && images["momonga-chaser"];
     ctx.save();
@@ -1254,11 +1244,11 @@
       var dw = dh * ((sprite.width || 394) / (sprite.height || 334));
       ctx.fillStyle = "rgba(60, 52, 44, 0.18)";
       ctx.beginPath();
-      ctx.ellipse(0, 8, dw * 0.28, 7, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 4, dw * 0.28, 6, 0, 0, Math.PI * 2);
       ctx.fill();
-      // 原图尾巴在右侧。翻过来让脸朝坡下，尾巴留在上坡一侧。
+      // 原图尾巴在右侧。翻过来让脸朝坡下，脚落在坡面上。
       ctx.scale(-1, 1);
-      ctx.drawImage(sprite, -dw / 2, -dh * 0.7, dw, dh);
+      ctx.drawImage(sprite, -dw / 2, -dh + 12, dw, dh);
       ctx.restore();
       return;
     }
@@ -1346,6 +1336,8 @@
     if (kartImg) {
       var kh = 90;
       var kw = kh * ((kartImg.width || 248) / (kartImg.height || 299));
+      // 车头朝局部 +x，也就是坡下、前进方向。
+      ctx.scale(-1, 1);
       ctx.drawImage(kartImg, -kw / 2, -kh + 40, kw, kh);
       ctx.restore();
       return;
