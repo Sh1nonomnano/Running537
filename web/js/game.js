@@ -224,8 +224,10 @@
     var time = 0;
     var index = 0;
     return {
-      update: function (dt) {
-        time += dt;
+      update: function (dt, rate) {
+        var speed = rate == null ? 1 : rate;
+        if (!(dt > 0) || !(speed > 0)) return;
+        time += dt * speed;
         if (time > total) {
           index = 0;
           time %= total;
@@ -234,6 +236,9 @@
       },
       current: function () {
         return frames[seq[index]];
+      },
+      cycle: function () {
+        return total > 0 ? time / total : 0;
       }
     };
   }
@@ -632,6 +637,7 @@
       }
       ctx.setTransform(bw / CONFIG.width, 0, 0, bh / CONFIG.height, 0, 0);
       ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
     }
 
     function roundRect(x, y, w, h, r) {
@@ -647,7 +653,7 @@
     function menuCards() {
       return [
         { kind: "classic", title: "经典模式", sub: "矮砖跳过，高砖蹲过", x: 456, y: 156, w: 312, h: 96 },
-        { kind: "downhill", title: "下山模式", sub: "顺坡滑雪，躲开飞鼠", x: 456, y: 268, w: 312, h: 96 }
+        { kind: "downhill", title: "下山模式", sub: "顺着坡往下冲，躲开飞鼠", x: 456, y: 268, w: 312, h: 96 }
       ];
     }
 
@@ -660,6 +666,7 @@
         muted: muted,
         tip: mode === "play" ? tipLeft : 0,
         reduceMotion: reduceMotion,
+        animPhase: anim && anim.cycle ? anim.cycle() : 0,
         width: CONFIG.width,
         height: CONFIG.height
       };
@@ -696,9 +703,20 @@
       ctx.drawImage(img, cloud.x, cloud.y, 100, 60);
     }
 
+    function drawFitted(img, boxX, boxY, boxW, boxH) {
+      var ih = img.height || 1;
+      var iw = img.width || 1;
+      if (ih < 1) ih = 1;
+      var dh = boxH;
+      var dw = dh * (iw / ih);
+      var dx = boxX + (boxW - dw) / 2;
+      var dy = boxY + boxH - dh;
+      ctx.drawImage(img, dx, dy, dw, dh);
+    }
+
     function drawPlayer(player) {
       if (!player.grounded()) {
-        ctx.drawImage(images.jump, player.x, player.y, player.w, player.h);
+        drawFitted(images.jump, player.x, player.y, player.w, player.h);
         return;
       }
       if (player.ducked) {
@@ -711,7 +729,7 @@
         ctx.drawImage(images.duck, dx, dy, dw, dh);
         return;
       }
-      ctx.drawImage(anim.current(), player.x, player.y, player.w, player.h);
+      drawFitted(anim.current(), player.x, player.y, player.w, player.h);
     }
 
     function drawHud() {
@@ -779,7 +797,12 @@
         ctx.fillStyle = "#6d6258";
         ctx.fillText(card.sub, card.x + 18, card.y + 66);
         if (on && anim) {
-          ctx.drawImage(anim.current(), card.x + card.w - 70, card.y + 12, 52, 72);
+          var frame = anim.current();
+          var ih = frame.height || 1;
+          var iw = frame.width || 1;
+          var dh = 72;
+          var dw = dh * (iw / ih);
+          ctx.drawImage(frame, card.x + card.w - 16 - dw, card.y + (card.h - dh) / 2, dw, dh);
         }
       }
       drawBadge("经典最高 " + highScore, 16, 16);
@@ -924,6 +947,17 @@
       }
     }
 
+    function downhillRunRate(player) {
+      if (!player || player.caught) return 0.45;
+      if (player.kart > 0) return 0;
+      if (!player.grounded) return 0;
+      var rate = (player.vs || 0) / 265;
+      if (player.stumble > 0) rate *= 0.58;
+      if (rate < 0.4) rate = 0.4;
+      if (rate > 2.5) rate = 2.5;
+      return rate;
+    }
+
     var last = 0;
     function frame(now) {
       requestAnimationFrame(frame);
@@ -940,7 +974,7 @@
           applyDuck();
         }
         var events = session.update(dt);
-        if (anim) anim.update(dt);
+        if (anim) anim.update(dt, gameKind === "downhill" ? downhillRunRate(session.player) : 1);
         var i;
         for (i = 0; i < events.length; i++) {
           if (events[i] === "hit") {
