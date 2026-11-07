@@ -21,10 +21,12 @@
     bodyR: 22,
     landTol: 0.72,
     stumbleTime: 0.9,
-    rotAccel: 30,
-    maxOmega: 12,
+    // 空中转得更快，松手也收得更快，落地仍看原来的正立容差。
+    rotAccel: 48,
+    maxOmega: 16,
     swing: 0.22,
-    recover: 0.13,
+    windup: 0.1,
+    recover: 0.18,
     stick: 74,
     scorePer: 64,
     anchorX: 246,
@@ -189,23 +191,51 @@
 
   ensureCurve(6000);
 
+  // 手在身前。平时棍子从这里斜横过身前，不沿坡刺出去，也不从头顶竖起。
+  function stickPivot() {
+    return { x: 22, y: 18 };
+  }
+
   function stickAngle(phase) {
     var e = 1 - Math.pow(1 - clamp(phase, 0, 1), 3);
-    return -1.65 + 2.8 * e;
+    // 从身侧的手横过身前，再扫到坡下。0 是沿坡向下。
+    return -1.05 + 1.9 * e;
+  }
+
+  // 击打判定仍用 stickAngle。起势往上抬一点，挥完收回横持。
+  function visualStickAngle(pose) {
+    var idle = stickAngle(0);
+    if (!pose || pose.mode === "idle") return idle;
+    if (pose.mode === "windup") {
+      var cocked = idle - 0.55;
+      return idle + (cocked - idle) * Math.sin(clamp(pose.phase, 0, 1) * Math.PI);
+    }
+    if (pose.mode === "swing") {
+      var base = stickAngle(pose.phase);
+      var p = clamp(pose.phase, 0, 1);
+      if (p > 0.86) return base + 0.26 * ((p - 0.86) / 0.14);
+      return base;
+    }
+    if (pose.mode === "recover") {
+      var end = stickAngle(1) + 0.26;
+      var p = clamp(pose.phase, 0, 1);
+      var e = 1 - Math.pow(1 - p, 2);
+      return end + (idle - end) * e - Math.sin(p * Math.PI) * 0.1;
+    }
+    return idle;
   }
 
   function stickLocals(phase) {
     var phi = stickAngle(phase);
-    var pivX = 16;
-    var pivY = -12;
+    var piv = stickPivot();
     var len = DH.stick;
     var pts = [];
     var i;
     for (i = 1; i <= 5; i++) {
       var t = i / 5;
       pts.push({
-        x: pivX + Math.cos(phi) * len * t,
-        y: pivY + Math.sin(phi) * len * t,
+        x: piv.x + Math.cos(phi) * len * t,
+        y: piv.y + Math.sin(phi) * len * t,
         phi: phi
       });
     }
@@ -238,7 +268,15 @@
     var smashPhase = 0;
     var smashGround = false;
     var bonus = 0;
+    var pulse = 0;
     var chase = DH.chaseStart;
+    var sprintMode = "idle";
+    var sprintK = 0;
+    var sprintCd = 0;
+    var sprintLeft = 0;
+    var sprintFrom = 0;
+    var sprintDest = 0;
+    var sprintRate = 0;
     var zoom = zoomTarget(260);
     var look = 0;
     var bag = {};
@@ -360,6 +398,77 @@
 
     function addGap(amount) {
       chase = clamp(chase + amount, 0, DH.chaseMax);
+      if (amount > 0 && sprintMode === "dash") sprintDest += amount;
+    }
+
+    // 用自己的随机，不占用关卡生成的 rng。间隔忽长忽短，第一次略晚。
+    function sprintUnit() {
+      return Math.random();
+    }
+
+    function sprintGap(first) {
+      if (first) return 5.6 + sprintUnit() * 4.0;
+      var roll = sprintUnit();
+      if (roll < 0.35) return 2.4 + sprintUnit() * 1.6;
+      if (roll < 0.7) return 4.2 + sprintUnit() * 2.2;
+      return 6.5 + sprintUnit() * 3.2;
+    }
+
+    function armSprint() {
+      if (!player.alive || player.caught || chase < 78) {
+        sprintMode = "idle";
+        sprintK = 0;
+        sprintCd = 1.3 + sprintUnit() * 2.1;
+        return;
+      }
+      sprintMode = "windup";
+      sprintLeft = 0.38;
+      sprintK = 0;
+    }
+
+    function launchSprint() {
+      var margin = 28 + sprintUnit() * 16;
+      if (!(chase > margin + 70)) {
+        sprintMode = "idle";
+        sprintK = 0;
+        sprintCd = 1.5 + sprintUnit() * 2.4;
+        return;
+      }
+      sprintMode = "dash";
+      sprintFrom = chase;
+      sprintDest = margin;
+      sprintLeft = 0.34;
+      sprintRate = 0;
+      sprintK = 1;
+    }
+
+    function tickSprint(dt) {
+      if (!player.alive || player.caught) return;
+      if (sprintMode === "idle") {
+        sprintCd -= dt;
+        sprintK = 0;
+        if (sprintCd <= 0) armSprint();
+        return;
+      }
+      if (sprintMode === "windup") {
+        sprintLeft -= dt;
+        sprintK = clamp(1 - sprintLeft / 0.38, 0, 1);
+        if (sprintLeft <= 0) launchSprint();
+        return;
+      }
+      sprintLeft -= dt;
+      sprintK = 1;
+      if (chase > sprintDest) {
+        var left = sprintLeft > 0.016 ? sprintLeft : 0.016;
+        var gap = chase - sprintDest;
+        chase -= gap * Math.min(1, dt / left);
+        if (chase < sprintDest) chase = sprintDest;
+      }
+      if (sprintLeft <= 0) {
+        sprintMode = "idle";
+        sprintK = 0;
+        sprintCd = sprintGap(false);
+      }
     }
 
     function pushHazards(fromS, minS) {
@@ -422,6 +531,7 @@
       player.vh = Math.max(player.vh, 180);
       bonus += 15;
       addGap(DH.smashGap);
+      pulse += 1;
       mark("smash");
       pop("击碎 +15", o.s + o.w * 0.5, o.hgt + 44);
       burst(o.s + o.w * 0.5, Math.max(16, o.hgt * 0.55));
@@ -555,7 +665,14 @@
         if (player.stumble < 0) player.stumble = 0;
       }
 
-      if (smashMode === "swing") {
+      if (smashMode === "windup") {
+        smashPhase += dt / DH.windup;
+        if (smashPhase >= 1) {
+          smashMode = "swing";
+          smashPhase = 0;
+          smashGround = false;
+        }
+      } else if (smashMode === "swing") {
         smashPhase += dt / DH.swing;
         if (smashPhase >= 1) {
           smashMode = "recover";
@@ -570,9 +687,8 @@
       }
       if (smashQueued && player.stumble <= 0 && player.alive && smashMode === "idle") {
         smashQueued = false;
-        smashMode = "swing";
+        smashMode = "windup";
         smashPhase = 0;
-        smashGround = false;
       } else if (smashQueued && player.stumble > 0) {
         smashQueued = false;
       }
@@ -581,7 +697,7 @@
       if (!player.grounded && canTurn) {
         if (rotateDir > 0) player.omega += DH.rotAccel * dt;
         else if (rotateDir < 0) player.omega -= DH.rotAccel * dt;
-        else player.omega *= Math.exp(-0.45 * dt);
+        else player.omega *= Math.exp(-1.65 * dt);
         player.omega = clamp(player.omega, -DH.maxOmega, DH.maxOmega);
         var dRot = player.omega * dt;
         player.rot += dRot;
@@ -663,6 +779,7 @@
       resolveBody();
       resolvePickup();
       chase += (player.vs - DH.chaseCruise) * DH.chaseFollow * dt;
+      tickSprint(dt);
       chase = clamp(chase, 0, DH.chaseMax);
       if (chase <= 0) beginCatch();
     }
@@ -766,6 +883,8 @@
       nextS += Math.max(DH.gapMin, gap - tighten);
     }
 
+    sprintCd = sprintGap(true);
+
     var session = {
       player: player,
       obstacles: obstacles,
@@ -794,6 +913,15 @@
     });
     Object.defineProperty(session, "look", {
       get: function () { return look; }
+    });
+    Object.defineProperty(session, "pulse", {
+      get: function () { return pulse; }
+    });
+    Object.defineProperty(session, "sprintMode", {
+      get: function () { return sprintMode; }
+    });
+    Object.defineProperty(session, "sprintK", {
+      get: function () { return sprintK; }
     });
 
     session.setRotate = function (dir) {
@@ -932,10 +1060,216 @@
     ctx.fillText(text, x, y);
   }
 
+  // 4 倍角色贴图缩回画面时保持各自宽高比。约等于原来 90px 左右的身高。
+  var SPRITE_SCALE = 0.27;
+  var FOOT_Y = 46;
+
+  var rig = {
+    session: null,
+    time: 0,
+    grounded: true,
+    vs: 0,
+    takeoff: 0,
+    land: 0,
+    sy: 1,
+    sx: 1,
+    lean: 0,
+    whip: 0,
+    air: 0,
+    duck: 0,
+    kart: 0,
+    bob: 0,
+    camY: 0,
+    camV: 0,
+    phase: 0,
+    pulse: 0,
+    ghosts: [],
+    ghostT: 0
+  };
+
+  function bitmapSize(img, scale) {
+    var ih = (img && (img.naturalHeight || img.height)) || 1;
+    var iw = (img && (img.naturalWidth || img.width)) || 1;
+    if (ih < 1) ih = 1;
+    if (iw < 1) iw = 1;
+    return { w: iw * scale, h: ih * scale };
+  }
+
+  function paintSprite(ctx, img, scale, footY, alpha) {
+    if (!img || !(alpha > 0.02)) return;
+    var size = bitmapSize(img, scale);
+    ctx.save();
+    ctx.globalAlpha *= alpha;
+    ctx.drawImage(img, -size.w / 2, footY - size.h, size.w, size.h);
+    ctx.restore();
+  }
+
+  function easeToward(current, target, dt, speed) {
+    if (!(dt > 0)) return current;
+    return current + (target - current) * (1 - Math.exp(-speed * dt));
+  }
+
+  function syncRig(session, pose, reduce, phase) {
+    var p = session.player;
+    if (rig.session !== session) {
+      rig.session = session;
+      rig.time = session.time || 0;
+      rig.grounded = !!p.grounded;
+      rig.vs = p.vs || 0;
+      rig.takeoff = 0;
+      rig.land = 0;
+      rig.sy = 1;
+      rig.sx = 1;
+      rig.lean = 0;
+      rig.whip = 0;
+      rig.air = p.grounded ? 0 : 1;
+      rig.duck = p.stumble > 0 ? 1 : 0;
+      rig.kart = p.kart > 0 ? 1 : 0;
+      rig.bob = 0;
+      rig.camY = 0;
+      rig.camV = 0;
+      rig.phase = phase || 0;
+      rig.pulse = session.pulse || 0;
+      rig.sprintMode = "idle";
+      rig.ghosts = [];
+      rig.ghostT = 0;
+      return;
+    }
+
+    var dt = (session.time || 0) - rig.time;
+    if (!(dt > 0)) dt = 0;
+    if (dt > 0.05) dt = 0.05;
+    rig.time = session.time || 0;
+    rig.phase = phase || 0;
+
+    if (rig.grounded && !p.grounded && p.alive) {
+      rig.takeoff = 0.2;
+      rig.land = 0;
+      if (!reduce) rig.camV -= 66;
+    } else if (!rig.grounded && p.grounded && p.alive) {
+      rig.land = 0.24;
+      rig.takeoff = 0;
+      if (!reduce) rig.camV += 60;
+    }
+    if ((session.pulse || 0) !== rig.pulse) {
+      rig.pulse = session.pulse || 0;
+      if (!reduce) rig.camV += 46;
+    }
+    var spNow = session.sprintMode || "idle";
+    if (spNow === "dash" && rig.sprintMode !== "dash" && !reduce) rig.camV += 36;
+    rig.sprintMode = spNow;
+    rig.grounded = !!p.grounded;
+    if (rig.takeoff > 0) rig.takeoff = Math.max(0, rig.takeoff - dt);
+    if (rig.land > 0) rig.land = Math.max(0, rig.land - dt);
+
+    var sy = 1;
+    if (rig.takeoff > 0) {
+      var u = 1 - rig.takeoff / 0.2;
+      if (u < 0) u = 0;
+      if (u > 1) u = 1;
+      if (u < 0.45) sy = 1 - 0.22 * Math.sin((u / 0.45) * Math.PI);
+      else sy = 0.86 + 0.32 * Math.sin(((u - 0.45) / 0.55) * Math.PI * 0.5);
+    } else if (rig.land > 0) {
+      var landed = 1 - rig.land / 0.24;
+      if (landed < 0) landed = 0;
+      if (landed > 1) landed = 1;
+      if (landed < 0.4) sy = 1 - 0.26 * Math.sin((landed / 0.4) * Math.PI);
+      else {
+        var k = (landed - 0.4) / 0.6;
+        sy = 0.78 + 0.22 * k + 0.08 * Math.sin(k * Math.PI);
+      }
+    } else if (p.grounded && !(p.kart > 0) && p.stumble <= 0) {
+      var step = Math.sin(rig.phase * Math.PI * 4);
+      sy = 1 + step * 0.06 + Math.min(0.05, Math.max(0, (p.vs - 320) / 5000));
+    } else if (!p.grounded) {
+      sy = 1 + clamp((p.vh || 0) / 1400, -0.06, 0.1);
+    }
+    if (p.stumble > 0 && rig.land <= 0 && rig.takeoff <= 0) sy *= 0.94;
+    if (reduce) sy = 1 + (sy - 1) * 0.35;
+    var sx = 1 / Math.pow(Math.max(0.68, sy), 0.7);
+    rig.sy = easeToward(rig.sy, sy, dt, 18);
+    rig.sx = easeToward(rig.sx, sx, dt, 18);
+
+    var accel = dt > 0.0001 ? (p.vs - rig.vs) / dt : 0;
+    var kappa = slopeKappa(p.s);
+    var lean = clamp(accel / 2800, -0.14, 0.16);
+    if (p.grounded) lean += clamp((p.vs - 240) / 3200, 0, 0.07);
+    lean += clamp(-kappa * p.vs * 0.045, -0.07, 0.07);
+    if (!p.grounded) lean = clamp((p.vh || 0) / 4200, -0.05, 0.06);
+    if (p.stumble > 0) lean *= 0.4;
+    if (p.kart > 0) lean *= 0.55;
+    if (reduce) lean *= 0.4;
+    rig.lean = easeToward(rig.lean, lean, dt, 6.5);
+    rig.vs = p.vs;
+
+    var whip = 0;
+    if (!reduce && pose) {
+      if (pose.mode === "windup") whip = -0.16 * Math.sin(clamp(pose.phase, 0, 1) * Math.PI);
+      else if (pose.mode === "swing") whip = 0.18 * Math.sin(clamp(pose.phase, 0, 1) * Math.PI);
+      else if (pose.mode === "recover") whip = 0.08 * (1 - clamp(pose.phase, 0, 1));
+    }
+    rig.whip = easeToward(rig.whip, whip, dt, 16);
+
+    var duckT = p.stumble > 0 ? 1 : 0;
+    rig.duck = easeToward(rig.duck, duckT, dt, 12);
+    var airT = (!p.grounded && p.stumble <= 0) ? (rig.takeoff > 0.1 ? 0.12 : 1) : 0;
+    rig.air = easeToward(rig.air, airT, dt, 15);
+    rig.kart = easeToward(rig.kart, p.kart > 0 ? 1 : 0, dt, 7);
+
+    var bob = 0;
+    if (p.grounded && !(p.kart > 0) && p.stumble <= 0 && !reduce) {
+      var stride = Math.sin(rig.phase * Math.PI * 4);
+      bob = Math.max(0, stride) * (2.6 + Math.min(4.4, p.vs / 200));
+    }
+    rig.bob = easeToward(rig.bob, bob, dt, 14);
+
+    var gi;
+    for (gi = rig.ghosts.length - 1; gi >= 0; gi--) {
+      rig.ghosts[gi].life -= dt;
+      if (rig.ghosts[gi].life <= 0) rig.ghosts.splice(gi, 1);
+    }
+    if (!reduce && dt > 0 && p.alive && !p.caught) {
+      var speedT = (p.vs - 430) / 240;
+      if (p.kart > 0) speedT = Math.max(speedT, (p.vs - 380) / 240);
+      if (speedT > 0) {
+        rig.ghostT -= dt;
+        if (rig.ghostT <= 0) {
+          rig.ghostT = 0.05;
+          rig.ghosts.push({
+            s: p.s,
+            h: p.h,
+            rot: p.rot,
+            lean: rig.lean + rig.whip,
+            kart: rig.kart > 0.55,
+            life: 0.12,
+            max: 0.12,
+            speed: speedT > 1 ? 1 : speedT
+          });
+          if (rig.ghosts.length > 4) rig.ghosts.shift();
+        }
+      }
+    }
+
+    if (!reduce && dt > 0) {
+      var spring = 92;
+      var damp = 13;
+      rig.camV += (-spring * rig.camY - damp * rig.camV) * dt;
+      rig.camY += rig.camV * dt;
+      if (rig.camY > 12) rig.camY = 12;
+      if (rig.camY < -12) rig.camY = -12;
+    } else if (reduce) {
+      rig.camY = 0;
+      rig.camV = 0;
+    }
+  }
+
   function drawWorld(ctx, session, env) {
     var images = env.images;
     var player = session.player;
     var font = env.font;
+    var reduce = !!(env && env.reduceMotion);
+    var pose = session.stickPose();
+    syncRig(session, pose, reduce, (env && env.animPhase) || 0);
     var zoom = session.zoom || 1;
     if (zoom < 0.45) zoom = 0.45;
     if (zoom > 1.05) zoom = 1.05;
@@ -959,6 +1293,7 @@
     drawMountains(ctx, player.s);
 
     ctx.save();
+    if (!reduce && rig.camY) ctx.translate(0, rig.camY);
     ctx.translate(DH.anchorX, DH.anchorY);
     ctx.scale(zoom, zoom);
     ctx.translate(-DH.anchorX, -DH.anchorY);
@@ -1004,9 +1339,11 @@
     drawBits(ctx, session.bits, world);
     drawFlakes(ctx, session._flakes, world);
     drawShadow(ctx, player, world, session._terrain);
-    if (!player.caught) drawMomonga(ctx, session, world, images, env.reduceMotion, false);
-    drawRider(ctx, player, images, env.anim, session.stickPose(), world, env.reduceMotion);
-    if (player.caught) drawMomonga(ctx, session, world, images, env.reduceMotion, true);
+    drawWind(ctx, session, world, reduce);
+    if (!player.caught) drawMomonga(ctx, session, world, images, reduce, false);
+    drawGhosts(ctx, world, images, env && env.anim);
+    drawRider(ctx, player, images, env.anim, pose, world, reduce);
+    if (player.caught) drawMomonga(ctx, session, world, images, reduce, true);
     drawPopups(ctx, session.popups, world, font);
     ctx.restore();
   }
@@ -1206,11 +1543,66 @@
     }
   }
 
+  function drawWind(ctx, session, world, reduceMotion) {
+    if (reduceMotion) return;
+    var player = session.player;
+    var t = (player.vs - 420) / 260;
+    if (player.kart > 0) t = Math.max(t, 0.28);
+    if (!(t > 0)) return;
+    if (t > 1) t = 1;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(62, 104, 124, " + (0.1 + t * 0.2) + ")";
+    ctx.lineWidth = 2;
+    var i;
+    for (i = 0; i < 4; i++) {
+      var back = 34 + i * 26 + ((rig.time * 110 + i * 37) % 30);
+      var lift = 22 + (i * 19) % 46;
+      var len = 16 + t * 22;
+      var a = world(player.s - back, player.h + lift);
+      var b = world(player.s - back - len, player.h + lift + (i % 2 ? 3 : -2));
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawGhosts(ctx, world, images, anim) {
+    if (!images || !rig.ghosts.length) return;
+    var i;
+    for (i = 0; i < rig.ghosts.length; i++) {
+      var g = rig.ghosts[i];
+      var img = null;
+      if (g.kart) img = images["usagi-car"];
+      else if ((rig.air || 0) > 0.5 && images.jump) img = images.jump;
+      else if (anim && anim.current) img = anim.current();
+      else img = images.jump;
+      if (!img) continue;
+      var p = world(g.s, g.h);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(slopeAngle(g.s) + g.rot + (g.lean || 0));
+      ctx.globalAlpha = Math.max(0, g.life / g.max) * 0.15 * (g.speed || 1);
+      if (g.kart) {
+        var kh = 90;
+        var kw = kh * ((img.naturalWidth || img.width || 1) / (img.naturalHeight || img.height || 1));
+        ctx.scale(-1, 1);
+        ctx.drawImage(img, -kw / 2, FOOT_Y - kh, kw, kh);
+      } else {
+        paintSprite(ctx, img, SPRITE_SCALE, FOOT_Y, 1);
+      }
+      ctx.restore();
+    }
+  }
+
   function drawShadow(ctx, player, world, terrain) {
     var ground = terrain(player.s);
     var feet = world(player.s, ground);
     var lift = Math.max(0, player.h - ground - DH.feet);
-    var rx = Math.max(8, 20 - lift * 0.04);
+    var spread = 0.82 + 0.18 * (rig.sx || 1);
+    var rx = Math.max(8, 20 - lift * 0.04) * spread;
     var th = slopeAngle(player.s);
     ctx.fillStyle = "rgba(60, 52, 44, " + (lift > 80 ? 0.08 : 0.2) + ")";
     ctx.beginPath();
@@ -1222,37 +1614,118 @@
     var player = session.player;
     var chase = session.chase || 0;
     var terrain = session._terrain;
+    var vs = player.vs || 0;
+    var urgency = 1 - chase / 240;
+    if (urgency < 0) urgency = 0;
+    if (urgency > 1) urgency = 1;
+    var stride = 0;
+    var step = 0;
+    if (!reduceMotion) {
+      stride = (session.time || 0) * (8.2 + vs / 150 + urgency * 5);
+      step = Math.sin(stride);
+    }
+    var sy = 1 + (reduceMotion ? 0 : step * (0.075 + urgency * 0.04));
+    var sx = 1 + (reduceMotion ? 0 : -step * 0.05);
+    if (!reduceMotion && step < 0) {
+      sy -= -step * (0.07 + urgency * 0.04);
+      sx += -step * 0.05;
+    }
     var bob = 0;
-    if (!reduceMotion) bob = Math.sin((session.time || 0) * 6.2) * 3;
+    if (!reduceMotion) bob = Math.max(0, step) * (6 + urgency * 5);
+    var rock = reduceMotion ? 0 : Math.sin(stride) * (0.045 + urgency * 0.03);
     var ms = player.s - chase;
-    var mh = terrain(ms) + bob;
-    var scale = 1;
+    var mh = terrain(ms) + bob * 0.45;
+    var reach = 0;
+    var lunge = 0;
+    var sp = lunging ? "idle" : (session.sprintMode || "idle");
+    var sk = lunging ? 0 : (session.sprintK || 0);
+    if (sp === "windup") {
+      sy = 0.74 - sk * 0.08;
+      sx = 1.1 + sk * 0.1;
+      bob = 0;
+      rock = -0.18 * sk;
+      reach = -14 * sk;
+      mh = terrain(ms) + 2;
+    } else if (sp === "dash") {
+      sy = 0.8;
+      sx = 1.22 + 0.42 * sk;
+      bob = 0;
+      rock = 0.22 * sk;
+      reach = 22 * sk;
+      mh = terrain(ms) + 1;
+    }
+    if (sp !== "idle" && !reduceMotion) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(64, 104, 122, " + (0.16 + sk * 0.34) + ")";
+      ctx.lineWidth = sp === "dash" ? 3.5 : 2.5;
+      ctx.lineCap = "round";
+      var nLine = sp === "dash" ? 4 : 2;
+      var n;
+      for (n = 0; n < nLine; n++) {
+        var back = 18 + n * 16;
+        var a = world(ms - back, mh + 14 + n * 6);
+        var b = world(ms - back - (sp === "dash" ? 36 : 16), mh + 16 + n * 5);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
     if (lunging) {
       var u = 1 - clamp(player.catchT / DH.catchTime, 0, 1);
-      ms = player.s - (1 - u) * 42;
-      mh = terrain(ms) + 6 + (1 - u) * 10;
-      scale = 1.05 + u * 0.25;
+      var wind = u < 0.28 ? u / 0.28 : 1;
+      var strike = u < 0.28 ? 0 : clamp((u - 0.28) / 0.3, 0, 1);
+      var ease = strike * strike * (3 - 2 * strike);
+      var cock = Math.sin(wind * Math.PI) * (1 - ease);
+      ms = player.s - (1 - ease) * 50 - cock * 8;
+      mh = terrain(ms) + cock * 10 + ease * 2;
+      sy = 0.8 + ease * 0.34 - cock * 0.1;
+      sx = 0.92 + ease * 0.42 + cock * 0.1;
+      rock = -0.14 * cock + 0.16 * ease;
+      lunge = ease;
+      reach = ease * 16 - cock * 8;
+    }
+    if (lunge > 0.25 && !reduceMotion) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(64, 104, 122, " + (0.12 + lunge * 0.28) + ")";
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      var n;
+      for (n = 0; n < 3; n++) {
+        var a = world(ms - 20 - n * 14, mh + 16 + n * 7);
+        var b = world(ms - 46 - n * 18, mh + 20 + n * 5);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
     var p = world(ms, mh);
     var th = slopeAngle(ms);
     var sprite = images && images["momonga-chaser"];
     ctx.save();
     ctx.translate(p.x, p.y);
-    ctx.rotate(th);
+    ctx.rotate(th + rock);
+    ctx.translate(reach, 0);
     if (sprite) {
-      var dh = 72 * scale;
-      var dw = dh * ((sprite.width || 394) / (sprite.height || 334));
+      var dh = 74;
+      var dw = dh * ((sprite.naturalWidth || sprite.width || 394) / (sprite.naturalHeight || sprite.height || 334));
       ctx.fillStyle = "rgba(60, 52, 44, 0.18)";
       ctx.beginPath();
-      ctx.ellipse(0, 4, dw * 0.28, 6, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 4, dw * 0.28 * sx, 6, 0, 0, Math.PI * 2);
       ctx.fill();
+      var foot = 12;
+      ctx.translate(0, foot);
+      ctx.scale(-sx, sy);
+      ctx.translate(0, -foot);
       // 原图尾巴在右侧。翻过来让脸朝坡下，脚落在坡面上。
-      ctx.scale(-1, 1);
-      ctx.drawImage(sprite, -dw / 2, -dh + 12, dw, dh);
+      ctx.drawImage(sprite, -dw / 2, -dh + foot, dw, dh);
       ctx.restore();
       return;
     }
-    ctx.scale(scale * 1.15, scale * 1.15);
+    ctx.scale(sx * 1.15, sy * 1.15);
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.strokeStyle = "#3c342c";
@@ -1322,9 +1795,10 @@
   function drawRider(ctx, player, images, anim, pose, world, reduceMotion) {
     if (!images) return;
     var p = world(player.s, player.h);
+    var foot = FOOT_Y;
     ctx.save();
     ctx.translate(p.x, p.y);
-    ctx.rotate(slopeAngle(player.s) + player.rot);
+    ctx.rotate(slopeAngle(player.s) + player.rot + (rig.lean || 0) + (rig.whip || 0));
     if (player.stumble > 0) {
       var k = player.stumble / DH.stumbleTime;
       if (k > 1) k = 1;
@@ -1332,52 +1806,76 @@
       if (reduceMotion) wob *= 0.35;
       ctx.rotate(wob);
     }
-    var kartImg = player.kart > 0 && images["usagi-car"];
-    if (kartImg) {
-      var kh = 90;
-      var kw = kh * ((kartImg.width || 248) / (kartImg.height || 299));
+    ctx.translate(0, -(rig.bob || 0));
+    ctx.translate(0, foot);
+    ctx.scale(rig.sx || 1, rig.sy || 1);
+    ctx.translate(0, -foot);
+
+    var kartA = rig.kart || 0;
+    var hop = Math.sin(Math.min(1, Math.max(0, kartA)) * Math.PI) * 11;
+    var kartImg = images["usagi-car"];
+    if (kartImg && kartA > 0.03) {
+      ctx.save();
+      ctx.globalAlpha *= kartA;
+      ctx.translate(0, -hop);
+      var grow = 0.84 + 0.16 * kartA;
+      ctx.translate(0, foot);
+      ctx.scale(grow, grow);
+      ctx.translate(0, -foot);
       // 车头朝局部 +x，也就是坡下、前进方向。
       ctx.scale(-1, 1);
-      ctx.drawImage(kartImg, -kw / 2, -kh + 40, kw, kh);
+      var kh = 90;
+      var kw = kh * ((kartImg.naturalWidth || kartImg.width || 248) / (kartImg.naturalHeight || kartImg.height || 299));
+      var drive = 0;
+      if (!reduceMotion && kartA > 0.75) {
+        drive = Math.sin((rig.time || 0) * (12 + Math.min(8, player.vs / 120))) * 1.4;
+      }
+      ctx.drawImage(kartImg, -kw / 2, foot - kh + drive, kw, kh);
       ctx.restore();
-      return;
     }
-    var img = images.jump;
-    if (player.stumble > 0 && images.duck) img = images.duck;
-    else if (player.grounded && anim) img = anim.current();
-    if (img === images.duck) {
-      var ih = img.height || 70;
-      var iw = img.width || 72;
-      var dh = 60;
-      var dw = dh * (iw / ih);
-      ctx.drawImage(img, -dw / 2, -dh + 46, dw, dh);
-    } else if (img) {
-      ctx.drawImage(img, -34, -54, 68, 102);
+
+    var bodyA = 1 - kartA;
+    if (bodyA > 0.03) {
+      ctx.save();
+      ctx.translate(0, -hop * 0.65);
+      var duckW = clamp(rig.duck || 0, 0, 1);
+      var airW = clamp(rig.air || 0, 0, 1) * (1 - duckW);
+      var runW = 1 - duckW - airW;
+      if (runW < 0) runW = 0;
+      var runImg = anim && anim.current ? anim.current() : null;
+      paintSprite(ctx, runImg, SPRITE_SCALE, foot, bodyA * runW);
+      paintSprite(ctx, images.jump, SPRITE_SCALE, foot, bodyA * airW);
+      paintSprite(ctx, images.duck, SPRITE_SCALE, foot, bodyA * duckW);
+      if (kartA < 0.5) {
+        ctx.save();
+        ctx.globalAlpha *= bodyA;
+        drawStick(ctx, pose, reduceMotion);
+        ctx.restore();
+      }
+      ctx.restore();
     }
-    drawStick(ctx, pose, reduceMotion);
     ctx.restore();
   }
 
   function drawStick(ctx, pose, reduceMotion) {
-    var angle = stickAngle(0);
-    if (pose.mode === "swing") angle = stickAngle(pose.phase);
-    else if (pose.mode === "recover") {
-      var end = stickAngle(1);
-      var idle = stickAngle(0);
-      angle = end + (idle - end) * clamp(pose.phase, 0, 1);
-    }
-    if (pose.mode === "swing" && !reduceMotion && pose.phase > 0.18) {
-      ctx.strokeStyle = "rgba(226, 168, 75, 0.35)";
-      ctx.lineWidth = 8;
-      ctx.lineCap = "round";
-      strokeStick(ctx, stickAngle(Math.max(0, pose.phase - 0.14)));
+    var angle = visualStickAngle(pose);
+    var width = 8;
+    if (pose.mode === "swing") width = 8 + 3.5 * Math.sin(clamp(pose.phase, 0, 1) * Math.PI);
+    else if (pose.mode === "windup") width = 7;
+    ctx.lineCap = "round";
+    if (!reduceMotion && (pose.mode === "swing" || pose.mode === "windup")) {
+      var back = pose.mode === "swing"
+        ? visualStickAngle({ mode: "swing", phase: Math.max(0, pose.phase - 0.16) })
+        : visualStickAngle({ mode: "windup", phase: Math.max(0, pose.phase - 0.18) });
+      ctx.strokeStyle = pose.mode === "windup" ? "rgba(226, 168, 75, 0.28)" : "rgba(226, 168, 75, 0.4)";
+      ctx.lineWidth = width + 1;
+      strokeStick(ctx, back);
     }
     ctx.strokeStyle = "#e2a84b";
-    ctx.lineWidth = 8;
-    ctx.lineCap = "round";
+    ctx.lineWidth = width;
     var tip = strokeStick(ctx, angle);
     ctx.strokeStyle = "#fffaf2";
-    ctx.lineWidth = 8;
+    ctx.lineWidth = width;
     ctx.beginPath();
     ctx.moveTo(tip.x, tip.y);
     ctx.lineTo(tip.x + Math.cos(angle) * 14, tip.y + Math.sin(angle) * 14);
@@ -1385,12 +1883,11 @@
   }
 
   function strokeStick(ctx, phi) {
-    var pivX = 16;
-    var pivY = -12;
-    var tipX = pivX + Math.cos(phi) * DH.stick;
-    var tipY = pivY + Math.sin(phi) * DH.stick;
+    var piv = stickPivot();
+    var tipX = piv.x + Math.cos(phi) * DH.stick;
+    var tipY = piv.y + Math.sin(phi) * DH.stick;
     ctx.beginPath();
-    ctx.moveTo(pivX, pivY);
+    ctx.moveTo(piv.x, piv.y);
     ctx.lineTo(tipX, tipY);
     ctx.stroke();
     return { x: tipX, y: tipY };
@@ -1415,11 +1912,16 @@
   function drawDanger(ctx, session) {
     var chase = session.chase;
     var caught = !!(session.player && session.player.caught);
-    if (!caught && !(chase < DH.chaseDanger)) return;
-    var k = caught ? 1 : (DH.chaseDanger - chase) / DH.chaseDanger;
+    var sp = session.sprintMode || "idle";
+    var sk = session.sprintK || 0;
+    var charging = sp === "windup" || sp === "dash";
+    if (!caught && !(chase < DH.chaseDanger) && !charging) return;
+    var k = caught ? 1 : 0;
+    if (!caught && chase < DH.chaseDanger) k = (DH.chaseDanger - chase) / DH.chaseDanger;
+    if (charging) k = Math.max(k, 0.42 + 0.58 * sk);
     if (k < 0) k = 0;
     if (k > 1) k = 1;
-    var alpha = 0.1 + 0.2 * k;
+    var alpha = 0.14 + 0.32 * k;
     var g = ctx.createRadialGradient(
       DH.width / 2, DH.height / 2, DH.width * 0.28,
       DH.width / 2, DH.height / 2, DH.width * 0.68
