@@ -191,46 +191,51 @@
 
   ensureCurve(6000);
 
-  function stickAngle(phase) {
-    var e = 1 - Math.pow(1 - clamp(phase, 0, 1), 3);
-    return -1.65 + 2.8 * e;
+  // 手在身前。平时棍子从这里斜横过身前，不沿坡刺出去，也不从头顶竖起。
+  function stickPivot() {
+    return { x: 22, y: 18 };
   }
 
-  // 击打判定仍用 stickAngle。画面上先向后蓄、挥过之后再多送一截，收回时略带回。
+  function stickAngle(phase) {
+    var e = 1 - Math.pow(1 - clamp(phase, 0, 1), 3);
+    // 从身侧的手横过身前，再扫到坡下。0 是沿坡向下。
+    return -1.05 + 1.9 * e;
+  }
+
+  // 击打判定仍用 stickAngle。起势往上抬一点，挥完收回横持。
   function visualStickAngle(pose) {
     var idle = stickAngle(0);
     if (!pose || pose.mode === "idle") return idle;
     if (pose.mode === "windup") {
-      var cocked = -2.28;
+      var cocked = idle - 0.55;
       return idle + (cocked - idle) * Math.sin(clamp(pose.phase, 0, 1) * Math.PI);
     }
     if (pose.mode === "swing") {
       var base = stickAngle(pose.phase);
       var p = clamp(pose.phase, 0, 1);
-      if (p > 0.8) return base + 0.46 * Math.pow((p - 0.8) / 0.2, 2);
+      if (p > 0.86) return base + 0.26 * ((p - 0.86) / 0.14);
       return base;
     }
     if (pose.mode === "recover") {
-      var end = stickAngle(1) + 0.46;
+      var end = stickAngle(1) + 0.26;
       var p = clamp(pose.phase, 0, 1);
       var e = 1 - Math.pow(1 - p, 2);
-      return end + (idle - end) * e - Math.sin(p * Math.PI) * 0.18;
+      return end + (idle - end) * e - Math.sin(p * Math.PI) * 0.1;
     }
     return idle;
   }
 
   function stickLocals(phase) {
     var phi = stickAngle(phase);
-    var pivX = 16;
-    var pivY = -12;
+    var piv = stickPivot();
     var len = DH.stick;
     var pts = [];
     var i;
     for (i = 1; i <= 5; i++) {
       var t = i / 5;
       pts.push({
-        x: pivX + Math.cos(phi) * len * t,
-        y: pivY + Math.sin(phi) * len * t,
+        x: piv.x + Math.cos(phi) * len * t,
+        y: piv.y + Math.sin(phi) * len * t,
         phi: phi
       });
     }
@@ -265,6 +270,13 @@
     var bonus = 0;
     var pulse = 0;
     var chase = DH.chaseStart;
+    var sprintMode = "idle";
+    var sprintK = 0;
+    var sprintCd = 0;
+    var sprintLeft = 0;
+    var sprintFrom = 0;
+    var sprintDest = 0;
+    var sprintRate = 0;
     var zoom = zoomTarget(260);
     var look = 0;
     var bag = {};
@@ -386,6 +398,77 @@
 
     function addGap(amount) {
       chase = clamp(chase + amount, 0, DH.chaseMax);
+      if (amount > 0 && sprintMode === "dash") sprintDest += amount;
+    }
+
+    // 用自己的随机，不占用关卡生成的 rng。间隔忽长忽短，第一次略晚。
+    function sprintUnit() {
+      return Math.random();
+    }
+
+    function sprintGap(first) {
+      if (first) return 5.6 + sprintUnit() * 4.0;
+      var roll = sprintUnit();
+      if (roll < 0.35) return 2.4 + sprintUnit() * 1.6;
+      if (roll < 0.7) return 4.2 + sprintUnit() * 2.2;
+      return 6.5 + sprintUnit() * 3.2;
+    }
+
+    function armSprint() {
+      if (!player.alive || player.caught || chase < 78) {
+        sprintMode = "idle";
+        sprintK = 0;
+        sprintCd = 1.3 + sprintUnit() * 2.1;
+        return;
+      }
+      sprintMode = "windup";
+      sprintLeft = 0.38;
+      sprintK = 0;
+    }
+
+    function launchSprint() {
+      var margin = 28 + sprintUnit() * 16;
+      if (!(chase > margin + 70)) {
+        sprintMode = "idle";
+        sprintK = 0;
+        sprintCd = 1.5 + sprintUnit() * 2.4;
+        return;
+      }
+      sprintMode = "dash";
+      sprintFrom = chase;
+      sprintDest = margin;
+      sprintLeft = 0.34;
+      sprintRate = 0;
+      sprintK = 1;
+    }
+
+    function tickSprint(dt) {
+      if (!player.alive || player.caught) return;
+      if (sprintMode === "idle") {
+        sprintCd -= dt;
+        sprintK = 0;
+        if (sprintCd <= 0) armSprint();
+        return;
+      }
+      if (sprintMode === "windup") {
+        sprintLeft -= dt;
+        sprintK = clamp(1 - sprintLeft / 0.38, 0, 1);
+        if (sprintLeft <= 0) launchSprint();
+        return;
+      }
+      sprintLeft -= dt;
+      sprintK = 1;
+      if (chase > sprintDest) {
+        var left = sprintLeft > 0.016 ? sprintLeft : 0.016;
+        var gap = chase - sprintDest;
+        chase -= gap * Math.min(1, dt / left);
+        if (chase < sprintDest) chase = sprintDest;
+      }
+      if (sprintLeft <= 0) {
+        sprintMode = "idle";
+        sprintK = 0;
+        sprintCd = sprintGap(false);
+      }
     }
 
     function pushHazards(fromS, minS) {
@@ -696,6 +779,7 @@
       resolveBody();
       resolvePickup();
       chase += (player.vs - DH.chaseCruise) * DH.chaseFollow * dt;
+      tickSprint(dt);
       chase = clamp(chase, 0, DH.chaseMax);
       if (chase <= 0) beginCatch();
     }
@@ -799,6 +883,8 @@
       nextS += Math.max(DH.gapMin, gap - tighten);
     }
 
+    sprintCd = sprintGap(true);
+
     var session = {
       player: player,
       obstacles: obstacles,
@@ -830,6 +916,12 @@
     });
     Object.defineProperty(session, "pulse", {
       get: function () { return pulse; }
+    });
+    Object.defineProperty(session, "sprintMode", {
+      get: function () { return sprintMode; }
+    });
+    Object.defineProperty(session, "sprintK", {
+      get: function () { return sprintK; }
     });
 
     session.setRotate = function (dir) {
@@ -1038,6 +1130,7 @@
       rig.camV = 0;
       rig.phase = phase || 0;
       rig.pulse = session.pulse || 0;
+      rig.sprintMode = "idle";
       rig.ghosts = [];
       rig.ghostT = 0;
       return;
@@ -1062,6 +1155,9 @@
       rig.pulse = session.pulse || 0;
       if (!reduce) rig.camV += 46;
     }
+    var spNow = session.sprintMode || "idle";
+    if (spNow === "dash" && rig.sprintMode !== "dash" && !reduce) rig.camV += 36;
+    rig.sprintMode = spNow;
     rig.grounded = !!p.grounded;
     if (rig.takeoff > 0) rig.takeoff = Math.max(0, rig.takeoff - dt);
     if (rig.land > 0) rig.land = Math.max(0, rig.land - dt);
@@ -1541,6 +1637,41 @@
     var mh = terrain(ms) + bob * 0.45;
     var reach = 0;
     var lunge = 0;
+    var sp = lunging ? "idle" : (session.sprintMode || "idle");
+    var sk = lunging ? 0 : (session.sprintK || 0);
+    if (sp === "windup") {
+      sy = 0.74 - sk * 0.08;
+      sx = 1.1 + sk * 0.1;
+      bob = 0;
+      rock = -0.18 * sk;
+      reach = -14 * sk;
+      mh = terrain(ms) + 2;
+    } else if (sp === "dash") {
+      sy = 0.8;
+      sx = 1.22 + 0.42 * sk;
+      bob = 0;
+      rock = 0.22 * sk;
+      reach = 22 * sk;
+      mh = terrain(ms) + 1;
+    }
+    if (sp !== "idle" && !reduceMotion) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(64, 104, 122, " + (0.16 + sk * 0.34) + ")";
+      ctx.lineWidth = sp === "dash" ? 3.5 : 2.5;
+      ctx.lineCap = "round";
+      var nLine = sp === "dash" ? 4 : 2;
+      var n;
+      for (n = 0; n < nLine; n++) {
+        var back = 18 + n * 16;
+        var a = world(ms - back, mh + 14 + n * 6);
+        var b = world(ms - back - (sp === "dash" ? 36 : 16), mh + 16 + n * 5);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
     if (lunging) {
       var u = 1 - clamp(player.catchT / DH.catchTime, 0, 1);
       var wind = u < 0.28 ? u / 0.28 : 1;
@@ -1752,12 +1883,11 @@
   }
 
   function strokeStick(ctx, phi) {
-    var pivX = 16;
-    var pivY = -12;
-    var tipX = pivX + Math.cos(phi) * DH.stick;
-    var tipY = pivY + Math.sin(phi) * DH.stick;
+    var piv = stickPivot();
+    var tipX = piv.x + Math.cos(phi) * DH.stick;
+    var tipY = piv.y + Math.sin(phi) * DH.stick;
     ctx.beginPath();
-    ctx.moveTo(pivX, pivY);
+    ctx.moveTo(piv.x, piv.y);
     ctx.lineTo(tipX, tipY);
     ctx.stroke();
     return { x: tipX, y: tipY };
@@ -1782,11 +1912,16 @@
   function drawDanger(ctx, session) {
     var chase = session.chase;
     var caught = !!(session.player && session.player.caught);
-    if (!caught && !(chase < DH.chaseDanger)) return;
-    var k = caught ? 1 : (DH.chaseDanger - chase) / DH.chaseDanger;
+    var sp = session.sprintMode || "idle";
+    var sk = session.sprintK || 0;
+    var charging = sp === "windup" || sp === "dash";
+    if (!caught && !(chase < DH.chaseDanger) && !charging) return;
+    var k = caught ? 1 : 0;
+    if (!caught && chase < DH.chaseDanger) k = (DH.chaseDanger - chase) / DH.chaseDanger;
+    if (charging) k = Math.max(k, 0.42 + 0.58 * sk);
     if (k < 0) k = 0;
     if (k > 1) k = 1;
-    var alpha = 0.1 + 0.2 * k;
+    var alpha = 0.14 + 0.32 * k;
     var g = ctx.createRadialGradient(
       DH.width / 2, DH.height / 2, DH.width * 0.28,
       DH.width / 2, DH.height / 2, DH.width * 0.68

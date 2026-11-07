@@ -1022,7 +1022,9 @@
         speed: session ? (session.blockSpeed != null ? session.blockSpeed : Math.round(session.player.vs || 0)) : null,
         blocks: session && session.blocks ? session.blocks.filter(function (b) { return b.visible && b.x > -50 && b.x < CONFIG.width; }).length : 0,
         cause: finalCause,
-        rot: session && gameKind === "downhill" ? session.player.rot : null
+        rot: session && gameKind === "downhill" ? session.player.rot : null,
+        chase: session && gameKind === "downhill" ? Math.round(session.chase || 0) : null,
+        sprint: session && gameKind === "downhill" ? (session.sprintMode || "idle") : null
       };
     };
   }
